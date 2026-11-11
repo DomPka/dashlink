@@ -157,6 +157,18 @@ class FakeCam : Closeable {
 
     fun fileRequests(): List<Request> = requests.filter { '?' !in it.target }
 
+    /** Kills every transfer that is under way right now, the way a vanished Wi-Fi link does. */
+    fun hangUp() {
+        for (s in open) {
+            try {
+                s.setSoLinger(true, 0)
+                s.close()
+            } catch (e: IOException) {
+                // already gone
+            }
+        }
+    }
+
     override fun close() {
         try {
             server.close()

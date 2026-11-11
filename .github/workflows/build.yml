@@ -1,15 +1,45 @@
 name: build
+
+# Every push to main is tested and, only if every test passes, published as the "latest" release.
+# "Run workflow" on any other branch runs the same tests without publishing anything.
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  # Never cut a run on main short: it may be in the middle of replacing the release.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  apk:
+  unit-tests:
+    name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      # JVM tests against a local fake camera, Android lint, and "the APK ships no libraries".
+      - run: chmod +x gradlew && ./gradlew --no-daemon testDebugUnitTest lintDebug checkNoRuntimeDependencies
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports
+          if-no-files-found: ignore
+
+  apk:
+    name: APK build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -18,15 +48,90 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew && ./gradlew --no-daemon assembleDebug
+      # This exact file is what the emulator job smoke-tests and what the release job publishes.
       - uses: actions/upload-artifact@v4
         with:
           name: DashLink-apk
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  emulator:
+    name: Emulator tests (API 34)
+    needs: apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: DashLink-apk
+          path: release
+      - name: Let the emulator use hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Build the test APKs before the emulator starts
+        run: chmod +x gradlew && ./gradlew assembleDebug assembleDebugAndroidTest
+      - name: Smoke test of the release APK, then the instrumented tests
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          ram-size: 3072M
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          # One command per line; the first one that fails ends the job. The instrumented tests are
+          # allowed to finish so that their report and the crash check below always run.
+          script: |
+            bash ci/smoke.sh release/app-debug.apk
+            ./gradlew connectedDebugAndroidTest || touch emulator-tests-failed
+            adb logcat -d -v threadtime > emulator-logcat.txt
+            python3 ci/report.py app/build/outputs/androidTest-results
+            bash ci/crashes.sh emulator-logcat.txt
+            test ! -f emulator-tests-failed
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-test-results
+          path: |
+            app/build/outputs/androidTest-results
+            app/build/reports/androidTests
+            smoke-logcat.txt
+            emulator-logcat.txt
+          if-no-files-found: ignore
+
+  release:
+    name: Release
+    needs: [unit-tests, apk, emulator]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: DashLink-apk
       - name: Publish as the "latest" release (direct APK link for the phone)
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk DashLink.apk
+          cp app-debug.apk DashLink.apk
           gh release delete latest --yes --cleanup-tag || true
-          gh release create latest DashLink.apk --prerelease \
-            --title "Latest build" --notes "Built from ${GITHUB_SHA::7}"
+          for attempt in 1 2 3; do
+            gh release create latest DashLink.apk --prerelease --target "$GITHUB_SHA" \
+              --title "Latest build" \
+              --notes "Built from ${GITHUB_SHA::7}. Unit tests, emulator tests and the smoke test of this APK passed in run $GITHUB_RUN_NUMBER." \
+              && exit 0
+            sleep 5
+          done
+          exit 1

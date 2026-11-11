@@ -6,6 +6,7 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.Configuration
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Bundle
@@ -25,6 +26,7 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
@@ -148,10 +150,23 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad, pad, pad)
         frame.addView(root, FrameLayout.LayoutParams(match, match))
 
+        // Top to bottom: [status, notice, the two rows of controls] [file list] [progress] [buttons].
+        // The progress line and the buttons are pinned to the bottom. What is above shares the rest: the
+        // controls scroll rather than take more than half of it, so on a short screen (landscape, a folded
+        // phone's cover screen, split screen) neither the list nor the Download and Stop buttons disappear.
+        val middle = LinearLayout(this)
+        middle.orientation = LinearLayout.VERTICAL
+        root.addView(middle, LinearLayout.LayoutParams(match, 0, 1f))
+        val topScroll = CappedScroll(this, 0.5f)
+        val top = LinearLayout(this)
+        top.orientation = LinearLayout.VERTICAL
+        topScroll.addView(top, ViewGroup.LayoutParams(match, wrap))
+        middle.addView(topScroll, LinearLayout.LayoutParams(match, wrap))
+
         status = TextView(this)
         status.id = R.id.status
         status.textSize = 14f
-        root.addView(status, LinearLayout.LayoutParams(match, wrap))
+        top.addView(status, LinearLayout.LayoutParams(match, wrap))
 
         noticeRow = LinearLayout(this)
         noticeRow.visibility = View.GONE
@@ -163,7 +178,7 @@ class MainActivity : Activity() {
         noticeBtn.setOnClickListener { noticeAction?.invoke() }
         noticeRow.addView(noticeText, LinearLayout.LayoutParams(0, wrap, 1f))
         noticeRow.addView(noticeBtn, LinearLayout.LayoutParams(wrap, wrap))
-        root.addView(noticeRow, LinearLayout.LayoutParams(match, wrap))
+        top.addView(noticeRow, LinearLayout.LayoutParams(match, wrap))
 
         val row1 = LinearLayout(this)
         ssid = EditText(this)
@@ -183,7 +198,7 @@ class MainActivity : Activity() {
         row1.addView(ssid, LinearLayout.LayoutParams(0, wrap, 1f))
         row1.addView(pass, LinearLayout.LayoutParams(0, wrap, 1f))
         row1.addView(connectBtn, LinearLayout.LayoutParams(wrap, wrap))
-        root.addView(row1, LinearLayout.LayoutParams(match, wrap))
+        top.addView(row1, LinearLayout.LayoutParams(match, wrap))
 
         val row2 = LinearLayout(this)
         folderSpin = Spinner(this)
@@ -218,7 +233,7 @@ class MainActivity : Activity() {
         row2.addView(folderSpin, LinearLayout.LayoutParams(0, wrap, 1f))
         row2.addView(rearBox, LinearLayout.LayoutParams(wrap, wrap))
         row2.addView(refreshBtn, LinearLayout.LayoutParams(wrap, wrap))
-        root.addView(row2, LinearLayout.LayoutParams(match, wrap))
+        top.addView(row2, LinearLayout.LayoutParams(match, wrap))
 
         list = ListView(this)
         list.id = R.id.list
@@ -228,7 +243,7 @@ class MainActivity : Activity() {
             val clip = clipAdapter.items.getOrNull(position) ?: return@setOnItemClickListener
             if (list.isItemChecked(position)) Browser.ticked.add(clip.path) else Browser.ticked.remove(clip.path)
         }
-        root.addView(list, LinearLayout.LayoutParams(match, 0, 1f))
+        middle.addView(list, LinearLayout.LayoutParams(match, 0, 1f))
 
         progress = TextView(this)
         progress.id = R.id.progress
@@ -258,6 +273,31 @@ class MainActivity : Activity() {
         root.addView(row3, LinearLayout.LayoutParams(match, wrap))
 
         setContentView(frame)
+        fitTitleBar()
+    }
+
+    /** The title bar is a luxury on a short screen: it costs as much height as one row of the file list. */
+    private fun fitTitleBar() {
+        val bar = actionBar ?: return
+        if (resources.configuration.screenHeightDp < 480) bar.hide() else bar.show()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Rotation, folding and unfolding, resizing: the same views simply lay themselves out again.
+        fitTitleBar()
+    }
+
+    /** A ScrollView that takes at most [share] of the height on offer and scrolls the rest. */
+    private class CappedScroll(context: Context, private val share: Float) : ScrollView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val spec = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
+                heightMeasureSpec
+            } else {
+                MeasureSpec.makeMeasureSpec((MeasureSpec.getSize(heightMeasureSpec) * share).toInt(), MeasureSpec.AT_MOST)
+            }
+            super.onMeasure(widthMeasureSpec, spec)
+        }
     }
 
     private inner class ClipAdapter : BaseAdapter() {

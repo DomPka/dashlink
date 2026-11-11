@@ -46,6 +46,16 @@ class DownloadService : Service() {
         var locksHeld = false
             private set
 
+        /** A service instance exists right now (between onCreate and onDestroy). */
+        @Volatile
+        var alive = false
+            private set
+
+        /** How many start commands the service has received in this process. */
+        @Volatile
+        var starts = 0
+            private set
+
         /** One thread does all downloading and all file clean-up, in order. */
         private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "dashlink-downloads") }
 
@@ -125,6 +135,7 @@ class DownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastStartId = startId
+        starts++
         // First thing, always: Android allows only a few seconds between startForegroundService() and this.
         goForeground()
         if (!busy) {
@@ -135,8 +146,14 @@ class DownloadService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onCreate() {
+        super.onCreate()
+        alive = true
+    }
+
     override fun onDestroy() {
         destroyed = true
+        alive = false
         dropLocks()
         super.onDestroy()
     }

@@ -58,7 +58,7 @@ internal object Report {
             val role = if (net == Link.network) "camera" else "other"
             sb.append("  Wi-Fi [$role] ${w?.ssid} ${w?.frequency} MHz ${w?.rssi} dBm ${w?.linkSpeed} Mbps\n")
         }
-        sb.append("Download service: working=${DownloadService.working}, locks held=${DownloadService.locksHeld}")
+        sb.append("Download service: running=${DownloadService.alive}, working=${DownloadService.working}, locks held=${DownloadService.locksHeld}")
         DownloadService.foregroundError?.let { sb.append(", NOT in the foreground: ").append(it) }
         sb.append("\n")
         Jobs.paused?.let { sb.append("Queue: ").append(it).append("\n") }
