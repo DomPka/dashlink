@@ -13,8 +13,8 @@ android {
         applicationId = "com.dompka.dashlink"
         minSdk = 31          // Android 12: first release with dual-Wi-Fi (STA+STA) support
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2"
+        versionCode = 3
+        versionName = "0.3"
         // Shown in the Diagnostics report, so a report says exactly which build it came from.
         resValue("string", "build_commit", (System.getenv("GITHUB_SHA") ?: "local build").take(12))
 

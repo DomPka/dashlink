@@ -348,7 +348,9 @@ class FakeCam : Closeable {
         if (r.sendLength) head.append("Content-Length: ").append(r.body.size).append("\r\n")
         head.append("Connection: close\r\n\r\n")
         val limit = if (r.cutAfter >= 0) minOf(r.cutAfter, r.body.size) else r.body.size
-        if (limit == 0) lastBytes()
+        // A reply with nothing to read, or with an error status, is over for the phone as soon as it has the
+        // headers: it does not read the body of a "404", so the next request may rightly arrive right then.
+        if (limit == 0 || r.status !in 200..299) lastBytes()
         out.write(head.toString().toByteArray(Charsets.ISO_8859_1))
         out.flush()
         var sent = 0

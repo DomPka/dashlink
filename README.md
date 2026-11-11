@@ -3,7 +3,7 @@
 A small Android app that downloads clips from a Mio MiVue dashcam over Wi-Fi **without taking over the
 phone's main Wi-Fi** — so wireless Android Auto can stay connected while it works.
 
-Status: v0.2, written from the protocol used by MiVue Pro 1.1.233.1. **Not yet tested against a camera or in a
+Status: v0.3, written from the protocol used by MiVue Pro 1.1.233.1. **Not yet tested against a camera or in a
 car.** Everything that can be tested without one is tested on every build (see [Tests](#tests)); what cannot
 is listed under [Not covered by any test](#not-covered-by-any-test).
 
@@ -74,6 +74,10 @@ process, the app being rebuilt, rotated and resized, the battery-optimisation qu
 `ci/smoke.sh app.apk` — installs the release APK on the emulator and pokes it over plain adb, with all
 permissions granted and with all denied. Any crash or ANR of the app in logcat fails the build.
 
+Every run also takes pictures of the screen in its main states (`ScreenshotTest`: not connected, permissions
+missing, a list of clips, a download, dark mode, an unfolded and a sideways screen). They are in the
+`screenshots` folder of the emulator jobs' artifacts - the quickest way to see what a change did to the look.
+
 An emulator is not a Galaxy Z Fold: it has stock Android's battery rules, one screen and a simulated Wi-Fi
 chip. The tests show that the app handles what Android can answer; they cannot show what a Samsung phone,
 the camera or the car will answer.
@@ -104,6 +108,7 @@ did, why Android last stopped the app, and what the camera answered — without 
 - `Jobs.kt`, `Runner.kt` — the download queue and what happens to one clip (wait, resume, give up).
 - `MediaFiles.kt` — files in shared storage (pending MediaStore items).
 - `DownloadService.kt` — the foreground service around the queue.
-- `Browser.kt`, `MainActivity.kt` — the file list and the single screen.
+- `Browser.kt`, `MainActivity.kt` — the file list and the single screen (built in code from platform widgets;
+  colours, shapes and icons are in `res/`). On a wide screen it shows two columns.
 - `Power.kt`, `Report.kt`, `Diag.kt`, `App.kt` — battery optimisation, the Diagnostics report, last-crash note.
 - `app/src/sharedTest` — `FakeCam`, used by both kinds of test.

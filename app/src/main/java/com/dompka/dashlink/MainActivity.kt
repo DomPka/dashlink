@@ -252,7 +252,7 @@ class MainActivity : Activity() {
             topScroll.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
             colA.addView(bottom, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
             root.addView(colA, LinearLayout.LayoutParams(0, match, 5f))
-            root.addView(colB, LinearLayout.LayoutParams(0, match, 7f).apply { marginStart = dp(12) })
+            root.addView(colB, LinearLayout.LayoutParams(0, match, 8f).apply { marginStart = dp(12) })
         } else {
             root.orientation = LinearLayout.VERTICAL
             topScroll.share = 0.5f
@@ -413,7 +413,7 @@ class MainActivity : Activity() {
         c.textSize = 14f
         c.typeface = medium
         c.gravity = Gravity.CENTER
-        c.setPadding(dp(14), 0, dp(14), 0)
+        c.setPadding(dp(12), 0, dp(12), 0)
         c.background = getDrawable(R.drawable.chip)
         c.setTextColor(getColorStateList(R.color.chip_text))
         c.isClickable = true
@@ -465,7 +465,7 @@ class MainActivity : Activity() {
                         Browser.load()
                     }
                 }
-                folderBar.addView(c, LinearLayout.LayoutParams(wrap, dp(36)).apply { if (i > 0) marginStart = dp(8) })
+                folderBar.addView(c, LinearLayout.LayoutParams(wrap, dp(36)).apply { if (i > 0) marginStart = dp(6) })
             }
         }
         for (i in 0 until folderBar.childCount) {
