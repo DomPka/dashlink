@@ -53,6 +53,7 @@ internal object Report {
         sb.append("Battery: exempt from optimisation=${Power.exempt(ctx)}, background restricted=${Power.restricted(ctx)}, standby bucket=${Power.standbyBucket(ctx)}\n")
         sb.append("Link: ${Link.state}, camera ${Link.cameraSsid} at ${Link.cameraIp}, asked ${Link.core.requests}x (${Link.core.retries} automatic)\n")
         Link.lastError?.let { sb.append("  ").append(it).append("\n") }
+        Link.core.addressInfo?.let { sb.append("  Addresses: ").append(it).append("\n") }
         for ((net, caps) in Link.wifiNets) {
             val w = caps.transportInfo as? WifiInfo
             val role = if (net == Link.network) "camera" else "other"

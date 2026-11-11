@@ -199,7 +199,12 @@ class DownloadService : Service() {
                     }
                     Runner.Result.STORAGE -> {
                         Jobs.pausedByLink = false
-                        Jobs.paused = "Downloads paused: " + (job.lastError ?: "the phone could not store the file") + "."
+                        val free = files.freeBytes()
+                        Jobs.paused = if (free < 2 * Runner.SPARE_BYTES) {
+                            "Downloads paused: the phone's storage is full (${free / 1_048_576} MB free). Free some space, then tap Resume."
+                        } else {
+                            "Downloads paused: " + (job.lastError ?: "the phone could not store the file") + "."
+                        }
                     }
                     else -> Unit
                 }

@@ -102,10 +102,10 @@ class DownloadTest {
     @Test
     fun service_stoppedFromOutside_releasesItsLocks_andKeepsTheClip() {
         val a = name("A")
-        cam.addFile("Normal", a, 3_000_000)
+        cam.addFile("Normal", a, 12_000_000)
         cam.tweak = { _, reply ->
             reply.chunk = 20_000
-            reply.chunkDelayMs = 40
+            reply.chunkDelayMs = 40                         // about 24 seconds: long enough to be stopped half-way
         }
         connect()
         Kit.launch().use {
@@ -202,7 +202,7 @@ class DownloadTest {
     @Test
     fun wifiDropsDuringDownload_reconnects_andFinishes() {
         val a = name("A")
-        val data = cam.addFile("Normal", a, 3_000_000)
+        val data = cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { _, reply ->
             reply.chunk = 20_000
             reply.chunkDelayMs = 40
@@ -244,7 +244,7 @@ class DownloadTest {
     fun stop_removesTheHalfDownloadedFile_andTheQueue() {
         val a = name("A")
         val b = name("B")
-        cam.addFile("Normal", a, 3_000_000)
+        cam.addFile("Normal", a, 12_000_000)
         cam.addFile("Normal", b, 1000)
         cam.tweak = { _, reply ->
             reply.chunk = 20_000

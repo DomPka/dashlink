@@ -49,6 +49,10 @@ internal class LinkCore(
     @Volatile var lastError: String? = null
         private set
 
+    /** What Android last reported about the camera network's addresses, and what was made of it. */
+    @Volatile var addressInfo: String? = null
+        private set
+
     /** How often the system has been asked since connect(), and how many of those were automatic. */
     @Volatile var requests = 0
         private set
@@ -148,7 +152,13 @@ internal class LinkCore(
 
     fun onAddresses(r: Request, dhcpServer: InetAddress?, gateways: List<InetAddress>, own: List<InetAddress>) {
         if (r !== active || network == null) return
-        val pick = pickCameraIp(dhcpServer, gateways, own) ?: return
+        val pick = pickCameraIp(dhcpServer, gateways, own)
+        // Kept word for word for the diagnostics report: if the camera's address is ever picked wrongly,
+        // this line says what the phone was told.
+        addressInfo = "DHCP server ${dhcpServer?.hostAddress}, gateways ${gateways.map { it.hostAddress }}, " +
+            "phone ${own.map { it.hostAddress }} -> " +
+            (pick?.let { "${it.ip} (${listOf("", "guessed", "gateway", "DHCP server")[it.rank]})" } ?: "nothing usable")
+        if (pick == null) return
         // A later update with less information must not replace a better answer with a guess.
         if (pick.rank < ipRank) return
         ipRank = pick.rank
@@ -228,6 +238,7 @@ internal class LinkCore(
         network = null
         cameraIp = null
         ipRank = 0
+        addressInfo = null
     }
 
     private fun cancelWatchdog() {

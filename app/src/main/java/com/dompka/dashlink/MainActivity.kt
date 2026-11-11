@@ -94,7 +94,7 @@ class MainActivity : Activity() {
         val missing = Report.missingPermissions(this)
         if (savedInstanceState == null && missing.isNotEmpty() && !prefs.getBoolean("askedPermissions", false)) {
             prefs.edit().putBoolean("askedPermissions", true).apply()
-            requestPermissions(missing.map { it.first }.toTypedArray(), ASK_FIRST)
+            requestPermissions(toRequest(missing), ASK_FIRST)
         }
         render()
     }
@@ -150,7 +150,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad, pad, pad)
         frame.addView(root, FrameLayout.LayoutParams(match, match))
 
-        // Top to bottom: [status, notice, the two rows of controls] [file list] [progress] [buttons].
+        // Top to bottom: [status, the two rows of controls, notice] [file list] [progress] [buttons].
         // The progress line and the buttons are pinned to the bottom. What is above shares the rest: the
         // controls scroll rather than take more than half of it, so on a short screen (landscape, a folded
         // phone's cover screen, split screen) neither the list nor the Download and Stop buttons disappear.
@@ -178,7 +178,6 @@ class MainActivity : Activity() {
         noticeBtn.setOnClickListener { noticeAction?.invoke() }
         noticeRow.addView(noticeText, LinearLayout.LayoutParams(0, wrap, 1f))
         noticeRow.addView(noticeBtn, LinearLayout.LayoutParams(wrap, wrap))
-        top.addView(noticeRow, LinearLayout.LayoutParams(match, wrap))
 
         val row1 = LinearLayout(this)
         ssid = EditText(this)
@@ -234,6 +233,8 @@ class MainActivity : Activity() {
         row2.addView(rearBox, LinearLayout.LayoutParams(wrap, wrap))
         row2.addView(refreshBtn, LinearLayout.LayoutParams(wrap, wrap))
         top.addView(row2, LinearLayout.LayoutParams(match, wrap))
+        // Below the controls, so that a long notice on a small screen scrolls instead of pushing Connect out of sight.
+        top.addView(noticeRow, LinearLayout.LayoutParams(match, wrap))
 
         list = ListView(this)
         list.id = R.id.list
@@ -417,6 +418,19 @@ class MainActivity : Activity() {
         return parts.joinToString(" ")
     }
 
+    /**
+     * The permissions to put in one request. Precise location is never asked for on its own: Android 12
+     * and later want the approximate one in the same request, and some releases ignore the request otherwise.
+     */
+    private fun toRequest(missing: List<Pair<String, String>>): Array<String> {
+        val out = ArrayList<String>()
+        for ((permission, _) in missing) {
+            out.add(permission)
+            if (permission == Manifest.permission.ACCESS_FINE_LOCATION) out.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+        return out.toTypedArray()
+    }
+
     /** The one thing most worth telling the user right now, or null. */
     private fun notice(): Notice? {
         startProblem?.let {
@@ -446,7 +460,7 @@ class MainActivity : Activity() {
         if (missing.isNotEmpty()) {
             return Notice(explain(missing), "Allow") {
                 askedAt = SystemClock.elapsedRealtime()
-                requestPermissions(missing.map { it.first }.toTypedArray(), ASK_AGAIN)
+                requestPermissions(toRequest(missing), ASK_AGAIN)
             }
         }
         if (waiting > 0 && !Power.exempt(this)) {

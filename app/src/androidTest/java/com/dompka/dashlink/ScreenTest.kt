@@ -116,11 +116,11 @@ class ScreenTest {
     @Test
     fun recreatedWhileDownloading_theDownloadGoesOn() {
         val a = name("A")
-        cam.addFile("Normal", a, 3_000_000)
+        cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { req, reply ->
             if ('?' !in req.target) {
                 reply.chunk = 20_000
-                reply.chunkDelayMs = 80                     // about twelve seconds
+                reply.chunkDelayMs = 80                     // about twenty-four seconds
             }
         }
         Kit.launch().use { scenario ->
@@ -282,7 +282,7 @@ class ScreenTest {
     @Test
     fun diagnostics_whileTheCameraIsBusy_doesNotWait() {
         val a = name("A")
-        cam.addFile("Normal", a, 3_000_000)
+        cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { req, reply ->
             if ('?' !in req.target) {
                 reply.chunk = 20_000

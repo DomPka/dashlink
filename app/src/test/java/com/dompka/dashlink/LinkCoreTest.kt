@@ -524,6 +524,10 @@ class LinkCoreTest {
         // A report with nothing usable does not wipe it either.
         core.onAddresses(r, null, emptyList(), emptyList())
         assertEquals("192.72.1.254", core.cameraIp)
+        // What the phone was told is kept for the diagnostics report, whatever was made of it.
+        assertEquals("DHCP server null, gateways [], phone [] -> nothing usable", core.addressInfo)
+        core.onAddresses(r, ip("192.72.1.254"), listOf(ip("192.72.1.254")), listOf(ip("192.72.1.33")))
+        assertEquals("DHCP server 192.72.1.254, gateways [192.72.1.254], phone [192.72.1.33] -> 192.72.1.254 (DHCP server)", core.addressInfo)
 
         // After a drop the slate is clean: the next connection starts from what it is told.
         core.onLost(r)
