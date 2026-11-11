@@ -6,7 +6,11 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Bundle
@@ -15,19 +19,28 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.TextUtils
+import android.text.style.AbsoluteSizeSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.TypefaceSpan
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.CheckBox
+import android.widget.Checkable
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ListView
+import android.widget.ProgressBar
 import android.widget.ScrollView
-import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
@@ -45,23 +58,39 @@ class MainActivity : Activity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var wifi: WifiManager
 
+    // The skeleton: two columns that sit under each other on a phone and side by side on a wide screen.
+    private lateinit var root: LinearLayout
+    private lateinit var colA: LinearLayout
+    private lateinit var colB: LinearLayout
+    private lateinit var topScroll: CappedScroll
+    private lateinit var bottom: LinearLayout
+    private var wide: Boolean? = null
+
+    private lateinit var pill: TextView
+    private lateinit var spinner: ProgressBar
     private lateinit var status: TextView
+    private lateinit var fields: LinearLayout
     private lateinit var noticeRow: LinearLayout
     private lateinit var noticeText: TextView
     private lateinit var noticeBtn: Button
     private lateinit var ssid: EditText
     private lateinit var pass: EditText
     private lateinit var connectBtn: Button
-    private lateinit var folderSpin: Spinner
-    private lateinit var folderAdapter: ArrayAdapter<String>
-    private lateinit var rearBox: CheckBox
+    private lateinit var folderBar: LinearLayout
+    private lateinit var rearChip: TextView
     private lateinit var list: ListView
+    private lateinit var emptyTitle: TextView
+    private lateinit var emptyText: TextView
     private lateinit var progress: TextView
+    private lateinit var bar: ProgressBar
+    private lateinit var downloadBtn: Button
     private val clipAdapter = ClipAdapter()
 
     private var shownClips: List<Cam.Clip>? = null
     private var shownFolders: List<String>? = null
     private var shownSsid: String? = null
+    private var shownGone: Boolean? = null
+    private var shownPill: String? = null
     private var saved: Set<String> = emptySet()
     private var dialog: AlertDialog? = null
     private var noticeAction: (() -> Unit)? = null
@@ -140,174 +169,457 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- UI
 
-    private fun buildUi() {
-        val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
-        val match = ViewGroup.LayoutParams.MATCH_PARENT
-        val pad = (12 * resources.displayMetrics.density).toInt()
+    private val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+    private val match = ViewGroup.LayoutParams.MATCH_PARENT
+    private val medium: Typeface by lazy { Typeface.create("sans-serif-medium", Typeface.NORMAL) }
 
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
+
+    private fun tint(color: Int): ColorStateList = ColorStateList.valueOf(getColor(color))
+
+    /**
+     * Two columns. A: heading, the camera link, whatever the user should know. B: folders and the file list.
+     * On a phone they sit under each other with the download panel pinned below; on a wide screen (an
+     * unfolded phone, landscape) they sit side by side and the download panel moves under column A.
+     * Column A scrolls rather than push the list or the Download and Stop buttons off a short screen.
+     */
+    private fun buildUi() {
         // fitsSystemWindows replaces a view's own padding, so the padding lives one level further in.
         val frame = FrameLayout(this)
         frame.fitsSystemWindows = true
-        val root = LinearLayout(this)
-        root.orientation = LinearLayout.VERTICAL
-        root.setPadding(pad, pad, pad, pad)
+        root = LinearLayout(this)
+        root.setPadding(dp(10), dp(6), dp(10), dp(10))
+        root.clipToPadding = false
+        root.clipChildren = false
         frame.addView(root, FrameLayout.LayoutParams(match, match))
 
-        // Top to bottom: [status, the two rows of controls, notice] [file list] [progress] [buttons].
-        // The progress line and the buttons are pinned to the bottom. What is above shares the rest: the
-        // controls scroll rather than take more than half of it, so on a short screen (landscape, a folded
-        // phone's cover screen, split screen) neither the list nor the Download and Stop buttons disappear.
-        val middle = LinearLayout(this)
-        middle.orientation = LinearLayout.VERTICAL
-        root.addView(middle, LinearLayout.LayoutParams(match, 0, 1f))
-        val topScroll = CappedScroll(this, 0.5f)
+        colA = LinearLayout(this)
+        colA.orientation = LinearLayout.VERTICAL
+        colA.clipChildren = false
+        topScroll = CappedScroll(this)
+        topScroll.isVerticalScrollBarEnabled = false
         val top = LinearLayout(this)
         top.orientation = LinearLayout.VERTICAL
+        top.setPadding(dp(2), 0, dp(2), dp(4))          // room for the cards' shadows inside the scrolling area
         topScroll.addView(top, ViewGroup.LayoutParams(match, wrap))
-        middle.addView(topScroll, LinearLayout.LayoutParams(match, wrap))
+        colA.addView(topScroll)
+        top.addView(buildHeading(), LinearLayout.LayoutParams(match, wrap))
+        top.addView(buildLinkCard(), LinearLayout.LayoutParams(match, wrap))
+        // Below the link card, so that a long notice on a small screen scrolls instead of pushing Connect out of sight.
+        top.addView(buildNotice(), LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(10) })
 
+        colB = LinearLayout(this)
+        colB.orientation = LinearLayout.VERTICAL
+        colB.addView(buildFolderBar(), LinearLayout.LayoutParams(match, wrap))
+        colB.addView(buildList(), LinearLayout.LayoutParams(match, 0, 1f))
+
+        bottom = buildDownloadPanel()
+
+        setContentView(frame)
+        arrange()
+    }
+
+    /** Puts the columns where the width of the screen wants them. Cheap when nothing changed. */
+    private fun arrange() {
+        val nowWide = resources.configuration.screenWidthDp >= 600
+        if (nowWide == wide) return
+        wide = nowWide
+        (bottom.parent as? ViewGroup)?.removeView(bottom)
+        root.removeAllViews()
+        if (nowWide) {
+            root.orientation = LinearLayout.HORIZONTAL
+            topScroll.share = 1f
+            topScroll.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
+            colA.addView(bottom, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
+            root.addView(colA, LinearLayout.LayoutParams(0, match, 5f))
+            root.addView(colB, LinearLayout.LayoutParams(0, match, 7f).apply { marginStart = dp(12) })
+        } else {
+            root.orientation = LinearLayout.VERTICAL
+            topScroll.share = 0.5f
+            topScroll.layoutParams = LinearLayout.LayoutParams(match, wrap)
+            root.addView(colA, LinearLayout.LayoutParams(match, wrap))
+            root.addView(colB, LinearLayout.LayoutParams(match, 0, 1f))
+            root.addView(bottom, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(8) })
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Rotation, folding and unfolding, resizing: the same views are put where the new shape wants them.
+        arrange()
+    }
+
+    private fun card(): LinearLayout {
+        val c = LinearLayout(this)
+        c.orientation = LinearLayout.VERTICAL
+        c.background = getDrawable(R.drawable.bg_card)
+        c.elevation = dp(1).toFloat()
+        c.setPadding(dp(16), dp(14), dp(16), dp(14))
+        return c
+    }
+
+    private fun style(b: Button, kind: Int) {
+        b.isAllCaps = false
+        b.stateListAnimator = null
+        b.elevation = 0f
+        b.typeface = medium
+        b.textSize = if (kind == FLAT) 14f else 15f
+        b.minHeight = 0
+        b.minimumHeight = 0
+        b.minWidth = 0
+        b.minimumWidth = 0
+        b.setPadding(dp(if (kind == FLAT) 12 else 20), 0, dp(if (kind == FLAT) 12 else 20), 0)
+        when (kind) {
+            FILLED -> {
+                b.background = getDrawable(R.drawable.btn_filled)
+                b.setTextColor(getColorStateList(R.color.filled_text))
+            }
+            TONAL -> {
+                b.background = getDrawable(R.drawable.btn_tonal)
+                b.setTextColor(getColor(R.color.on_accent_soft))
+            }
+            else -> {
+                b.background = getDrawable(R.drawable.btn_flat)
+                b.setTextColor(getColor(R.color.accent))
+            }
+        }
+    }
+
+    private fun buildHeading(): View {
+        val row = LinearLayout(this)
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(6), dp(6), dp(4), dp(10))
+        val title = TextView(this)
+        title.text = "DashLink"
+        title.textSize = 24f
+        title.typeface = medium
+        title.setTextColor(getColor(R.color.text))
+        spinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall)
+        spinner.indeterminateTintList = tint(R.color.accent)
+        spinner.visibility = View.GONE
+        pill = TextView(this)
+        pill.textSize = 12f
+        pill.typeface = medium
+        pill.setPadding(dp(10), dp(4), dp(10), dp(4))
+        pill.background = getDrawable(R.drawable.bg_pill)
+        row.addView(title, LinearLayout.LayoutParams(0, wrap, 1f))
+        row.addView(spinner, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
+        row.addView(pill, LinearLayout.LayoutParams(wrap, wrap))
+        return row
+    }
+
+    private fun field(hint: String): EditText {
+        val e = EditText(this)
+        e.hint = hint
+        e.setSingleLine()
+        e.textSize = 15f
+        e.background = getDrawable(R.drawable.bg_field)
+        e.setPadding(dp(14), 0, dp(14), 0)
+        e.setTextColor(getColor(R.color.text))
+        e.setHintTextColor(getColor(R.color.text_dim))
+        return e
+    }
+
+    private fun buildLinkCard(): View {
+        val card = card()
         status = TextView(this)
         status.id = R.id.status
-        status.textSize = 14f
-        top.addView(status, LinearLayout.LayoutParams(match, wrap))
+        status.textSize = 13f
+        status.setTextColor(getColor(R.color.text_dim))
+        status.setLineSpacing(dp(2).toFloat(), 1f)
+        card.addView(status, LinearLayout.LayoutParams(match, wrap))
 
-        noticeRow = LinearLayout(this)
-        noticeRow.visibility = View.GONE
-        noticeText = TextView(this)
-        noticeText.id = R.id.notice
-        noticeText.textSize = 13f
-        noticeBtn = Button(this)
-        noticeBtn.id = R.id.notice_action
-        noticeBtn.setOnClickListener { noticeAction?.invoke() }
-        noticeRow.addView(noticeText, LinearLayout.LayoutParams(0, wrap, 1f))
-        noticeRow.addView(noticeBtn, LinearLayout.LayoutParams(wrap, wrap))
-
-        val row1 = LinearLayout(this)
-        ssid = EditText(this)
+        // Only there while there is something to type: once the camera is connected the name is known.
+        fields = LinearLayout(this)
+        ssid = field("Camera Wi-Fi name")
         ssid.id = R.id.ssid
-        ssid.hint = "Camera Wi-Fi name"
-        ssid.setSingleLine()
         ssid.setText(prefs.getString("ssid", "MiVue"))
-        pass = EditText(this)
+        pass = field("Wi-Fi password")
         pass.id = R.id.pass
-        pass.hint = "Wi-Fi password"
-        pass.setSingleLine()
         pass.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        pass.typeface = Typeface.DEFAULT
         pass.setText(prefs.getString("pass", ""))
+        fields.addView(ssid, LinearLayout.LayoutParams(0, dp(46), 1f))
+        fields.addView(pass, LinearLayout.LayoutParams(0, dp(46), 1f).apply { marginStart = dp(8) })
+        card.addView(fields, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dp(12) })
+
         connectBtn = Button(this)
         connectBtn.id = R.id.connect
         connectBtn.setOnClickListener { toggleLink() }
-        row1.addView(ssid, LinearLayout.LayoutParams(0, wrap, 1f))
-        row1.addView(pass, LinearLayout.LayoutParams(0, wrap, 1f))
-        row1.addView(connectBtn, LinearLayout.LayoutParams(wrap, wrap))
-        top.addView(row1, LinearLayout.LayoutParams(match, wrap))
+        style(connectBtn, FILLED)
+        card.addView(connectBtn, LinearLayout.LayoutParams(match, dp(46)).apply { topMargin = dp(10) })
+        return card
+    }
 
-        val row2 = LinearLayout(this)
-        folderSpin = Spinner(this)
-        folderSpin.id = R.id.folder
-        folderAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, ArrayList<String>())
-        folderSpin.adapter = folderAdapter
-        folderSpin.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                // Also called when the screen is (re)built; only a real change loads the list again.
-                if (position != Browser.folder && position in Browser.folders.indices) {
-                    Browser.folder = position
-                    Browser.load()
+    private fun buildNotice(): View {
+        noticeRow = LinearLayout(this)
+        noticeRow.gravity = Gravity.CENTER_VERTICAL
+        noticeRow.background = getDrawable(R.drawable.bg_notice)
+        noticeRow.setPadding(dp(14), dp(10), dp(6), dp(10))
+        noticeRow.visibility = View.GONE
+        val icon = ImageView(this)
+        icon.setImageResource(R.drawable.ic_info)
+        icon.imageTintList = tint(R.color.warn)
+        noticeText = TextView(this)
+        noticeText.id = R.id.notice
+        noticeText.textSize = 13f
+        noticeText.setTextColor(getColor(R.color.warn))
+        noticeBtn = Button(this)
+        noticeBtn.id = R.id.notice_action
+        style(noticeBtn, FLAT)
+        noticeBtn.setTextColor(getColor(R.color.warn))
+        noticeBtn.setOnClickListener { noticeAction?.invoke() }
+        noticeRow.addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)))
+        noticeRow.addView(noticeText, LinearLayout.LayoutParams(0, wrap, 1f).apply { marginStart = dp(10) })
+        noticeRow.addView(noticeBtn, LinearLayout.LayoutParams(wrap, dp(40)).apply { marginStart = dp(4) })
+        return noticeRow
+    }
+
+    private fun chip(label: String): TextView {
+        val c = TextView(this)
+        c.text = label
+        c.textSize = 14f
+        c.typeface = medium
+        c.gravity = Gravity.CENTER
+        c.setPadding(dp(16), 0, dp(16), 0)
+        c.background = getDrawable(R.drawable.chip)
+        c.setTextColor(getColorStateList(R.color.chip_text))
+        c.isClickable = true
+        c.isFocusable = true
+        return c
+    }
+
+    private fun buildFolderBar(): View {
+        val row = LinearLayout(this)
+        row.gravity = Gravity.CENTER_VERTICAL
+        row.setPadding(dp(2), dp(10), 0, dp(8))
+        val scroll = HorizontalScrollView(this)
+        scroll.isHorizontalScrollBarEnabled = false
+        folderBar = LinearLayout(this)
+        scroll.addView(folderBar, ViewGroup.LayoutParams(wrap, wrap))
+        rearChip = chip("Rear cam")
+        rearChip.id = R.id.rear
+        rearChip.isSelected = Browser.rear
+        rearChip.setOnClickListener {
+            Browser.rear = !Browser.rear
+            rearChip.isSelected = Browser.rear
+            Browser.load()
+        }
+        val refresh = ImageButton(this)
+        refresh.id = R.id.refresh
+        refresh.setImageResource(R.drawable.ic_refresh)
+        refresh.imageTintList = tint(R.color.text_dim)
+        refresh.background = getDrawable(R.drawable.btn_flat)
+        refresh.contentDescription = "Refresh"
+        refresh.setOnClickListener { Browser.load() }
+        row.addView(scroll, LinearLayout.LayoutParams(0, wrap, 1f))
+        row.addView(rearChip, LinearLayout.LayoutParams(wrap, dp(36)).apply { marginStart = dp(8) })
+        row.addView(refresh, LinearLayout.LayoutParams(dp(40), dp(40)).apply { marginStart = dp(2) })
+        return row
+    }
+
+    /** One chip per folder the camera has; the chosen one is filled in. */
+    private fun showFolders() {
+        if (Browser.folders != shownFolders) {
+            shownFolders = Browser.folders
+            folderBar.removeAllViews()
+            for ((i, name) in Browser.folders.withIndex()) {
+                val c = chip(name)
+                c.setOnClickListener {
+                    if (i != Browser.folder && i in Browser.folders.indices) {
+                        Browser.folder = i
+                        Browser.load()
+                    }
                 }
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        rearBox = CheckBox(this)
-        rearBox.id = R.id.rear
-        rearBox.text = "Rear cam"
-        rearBox.isChecked = Browser.rear
-        rearBox.setOnCheckedChangeListener { _, checked ->
-            if (checked != Browser.rear) {
-                Browser.rear = checked
-                Browser.load()
+                folderBar.addView(c, LinearLayout.LayoutParams(wrap, dp(36)).apply { if (i > 0) marginStart = dp(8) })
             }
         }
-        val refreshBtn = Button(this)
-        refreshBtn.id = R.id.refresh
-        refreshBtn.text = "Refresh"
-        refreshBtn.setOnClickListener { Browser.load() }
-        row2.addView(folderSpin, LinearLayout.LayoutParams(0, wrap, 1f))
-        row2.addView(rearBox, LinearLayout.LayoutParams(wrap, wrap))
-        row2.addView(refreshBtn, LinearLayout.LayoutParams(wrap, wrap))
-        top.addView(row2, LinearLayout.LayoutParams(match, wrap))
-        // Below the controls, so that a long notice on a small screen scrolls instead of pushing Connect out of sight.
-        top.addView(noticeRow, LinearLayout.LayoutParams(match, wrap))
+        for (i in 0 until folderBar.childCount) {
+            val on = i == Browser.folder
+            val c = folderBar.getChildAt(i)
+            if (c.isSelected != on) c.isSelected = on
+        }
+        if (rearChip.isSelected != Browser.rear) rearChip.isSelected = Browser.rear
+    }
 
+    private fun buildList(): View {
+        val box = FrameLayout(this)
         list = ListView(this)
         list.id = R.id.list
         list.choiceMode = ListView.CHOICE_MODE_MULTIPLE
-        // Which rows are ticked, which folder is chosen and whether "Rear cam" is on live in Browser. Android
-        // must not restore its own, older picture of them over that when the screen is rebuilt: the list may
-        // have changed in the meantime, and the ticks would then sit on the wrong clips.
+        // Which rows are ticked lives in Browser. Android must not restore its own, older picture of them over
+        // that when the screen is rebuilt: the list may have changed in the meantime, and the ticks would then
+        // sit on the wrong clips.
         list.isSaveEnabled = false
-        folderSpin.isSaveEnabled = false
-        rearBox.isSaveEnabled = false
+        list.divider = ColorDrawable(Color.TRANSPARENT)
+        list.dividerHeight = dp(6)
+        list.selector = ColorDrawable(Color.TRANSPARENT)
+        list.clipToPadding = false
+        list.setPadding(dp(2), 0, dp(2), dp(4))
+        list.isFastScrollEnabled = true                 // a handle to drag once there are screens full of clips
         list.adapter = clipAdapter
         list.setOnItemClickListener { _, _, position, _ ->
             val clip = clipAdapter.items.getOrNull(position) ?: return@setOnItemClickListener
             if (list.isItemChecked(position)) Browser.ticked.add(clip.path) else Browser.ticked.remove(clip.path)
+            showSelection()
         }
-        middle.addView(list, LinearLayout.LayoutParams(match, 0, 1f))
 
+        val empty = LinearLayout(this)
+        empty.orientation = LinearLayout.VERTICAL
+        empty.gravity = Gravity.CENTER
+        empty.setPadding(dp(24), dp(12), dp(24), dp(12))
+        val icon = ImageView(this)
+        icon.setImageResource(R.drawable.ic_video)
+        icon.imageTintList = tint(R.color.outline)
+        emptyTitle = TextView(this)
+        emptyTitle.textSize = 16f
+        emptyTitle.typeface = medium
+        emptyTitle.gravity = Gravity.CENTER
+        emptyTitle.setTextColor(getColor(R.color.text))
+        emptyText = TextView(this)
+        emptyText.textSize = 13f
+        emptyText.gravity = Gravity.CENTER
+        emptyText.setTextColor(getColor(R.color.text_dim))
+        empty.addView(icon, LinearLayout.LayoutParams(dp(44), dp(44)))
+        empty.addView(emptyTitle, LinearLayout.LayoutParams(wrap, wrap).apply { topMargin = dp(8) })
+        empty.addView(emptyText, LinearLayout.LayoutParams(wrap, wrap).apply { topMargin = dp(2) })
+
+        box.addView(list, FrameLayout.LayoutParams(match, match))
+        box.addView(empty, FrameLayout.LayoutParams(match, match))
+        list.emptyView = empty
+        return box
+    }
+
+    private fun buildDownloadPanel(): LinearLayout {
+        val card = card()
+        card.elevation = dp(3).toFloat()
+        card.setPadding(dp(16), dp(8), dp(12), dp(12))
+
+        val head = LinearLayout(this)
         progress = TextView(this)
         progress.id = R.id.progress
         progress.textSize = 13f
-        root.addView(progress, LinearLayout.LayoutParams(match, wrap))
+        progress.setTextColor(getColor(R.color.text_dim))
+        progress.setLineSpacing(dp(2).toFloat(), 1f)
+        val diag = Button(this)
+        diag.id = R.id.diag
+        diag.text = "Diagnostics"
+        style(diag, FLAT)
+        diag.setOnClickListener { diagnostics() }
+        head.addView(progress, LinearLayout.LayoutParams(0, wrap, 1f).apply { topMargin = dp(8) })
+        head.addView(diag, LinearLayout.LayoutParams(wrap, dp(36)))
+        card.addView(head, LinearLayout.LayoutParams(match, wrap))
 
-        val row3 = LinearLayout(this)
-        val dl = Button(this)
-        dl.id = R.id.download
-        dl.text = "Download selected"
-        dl.setOnClickListener { downloadSelected() }
+        bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
+        bar.progressDrawable = getDrawable(R.drawable.progress)
+        bar.max = 1000
+        bar.minHeight = dp(6)
+        bar.maxHeight = dp(6)
+        bar.visibility = View.GONE
+        card.addView(bar, LinearLayout.LayoutParams(match, dp(6)).apply {
+            topMargin = dp(8)
+            marginEnd = dp(4)
+        })
+
+        val buttons = LinearLayout(this)
+        downloadBtn = Button(this)
+        downloadBtn.id = R.id.download
+        downloadBtn.text = "Download selected"
+        style(downloadBtn, FILLED)
+        downloadBtn.setOnClickListener { downloadSelected() }
         val stop = Button(this)
         stop.id = R.id.stop
         stop.text = "Stop"
+        style(stop, TONAL)
         stop.setOnClickListener {
             DownloadService.stopAll(this)
             startProblem = null
             render()
         }
-        val diag = Button(this)
-        diag.id = R.id.diag
-        diag.text = "Diagnostics"
-        diag.setOnClickListener { diagnostics() }
-        row3.addView(dl, LinearLayout.LayoutParams(0, wrap, 1f))
-        row3.addView(stop, LinearLayout.LayoutParams(wrap, wrap))
-        row3.addView(diag, LinearLayout.LayoutParams(wrap, wrap))
-        root.addView(row3, LinearLayout.LayoutParams(match, wrap))
-
-        setContentView(frame)
-        fitTitleBar()
+        buttons.addView(downloadBtn, LinearLayout.LayoutParams(0, dp(46), 1f))
+        buttons.addView(stop, LinearLayout.LayoutParams(wrap, dp(46)).apply { marginStart = dp(8) })
+        card.addView(buttons, LinearLayout.LayoutParams(match, wrap).apply {
+            topMargin = dp(12)
+            marginEnd = dp(4)
+        })
+        return card
     }
 
-    /** The title bar is a luxury on a short screen: it costs as much height as one row of the file list. */
-    private fun fitTitleBar() {
-        val bar = actionBar ?: return
-        if (resources.configuration.screenHeightDp < 480) bar.hide() else bar.show()
+    /** How many clips are ticked, on the button that acts on them. */
+    private fun showSelection() {
+        val n = Browser.ticked.size
+        show(downloadBtn, if (n > 0) "Download $n selected" else "Download selected")
     }
 
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        // Rotation, folding and unfolding, resizing: the same views simply lay themselves out again.
-        fitTitleBar()
-    }
+    /** A ScrollView that takes at most [share] of the height on offer and scrolls the rest; all of it at 1. */
+    private class CappedScroll(context: Context) : ScrollView(context) {
+        var share = 0.5f
 
-    /** A ScrollView that takes at most [share] of the height on offer and scrolls the rest. */
-    private class CappedScroll(context: Context, private val share: Float) : ScrollView(context) {
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            val spec = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
+            val spec = if (share >= 1f || MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
                 heightMeasureSpec
             } else {
                 MeasureSpec.makeMeasureSpec((MeasureSpec.getSize(heightMeasureSpec) * share).toInt(), MeasureSpec.AT_MOST)
             }
             super.onMeasure(widthMeasureSpec, spec)
         }
+    }
+
+    /** One clip in the list: what it is, when it was taken, whether it is on the phone already, and its tick. */
+    private inner class ClipRow(context: Context) : LinearLayout(context), Checkable {
+        val icon = ImageView(context)
+        val title = TextView(context)
+        val sub = TextView(context)
+        val savedMark = TextView(context)
+        private val box = CheckBox(context)
+        private var on = false
+
+        init {
+            gravity = Gravity.CENTER_VERTICAL
+            background = context.getDrawable(R.drawable.row)
+            setPadding(dp(12), dp(10), dp(6), dp(10))
+            icon.background = context.getDrawable(R.drawable.bg_round)
+            icon.backgroundTintList = tint(R.color.surface_alt)
+            icon.imageTintList = tint(R.color.accent)
+            icon.setPadding(dp(9), dp(9), dp(9), dp(9))
+            title.textSize = 15f
+            title.typeface = medium
+            title.setTextColor(getColor(R.color.text))
+            title.setSingleLine()
+            title.ellipsize = TextUtils.TruncateAt.END
+            sub.textSize = 12f
+            sub.setTextColor(getColor(R.color.text_dim))
+            sub.setSingleLine()
+            sub.ellipsize = TextUtils.TruncateAt.END
+            savedMark.text = "Saved"
+            savedMark.textSize = 11f
+            savedMark.typeface = medium
+            savedMark.setTextColor(getColor(R.color.ok))
+            savedMark.background = context.getDrawable(R.drawable.bg_pill)
+            savedMark.backgroundTintList = tint(R.color.ok_soft)
+            savedMark.setPadding(dp(8), dp(2), dp(8), dp(2))
+            // The row is what gets tapped; the box only shows the state.
+            box.isClickable = false
+            box.isFocusable = false
+            val texts = LinearLayout(context)
+            texts.orientation = VERTICAL
+            texts.addView(title, LayoutParams(match, wrap))
+            texts.addView(sub, LayoutParams(match, wrap).apply { topMargin = dp(2) })
+            addView(icon, LayoutParams(dp(40), dp(40)))
+            addView(texts, LayoutParams(0, wrap, 1f).apply { marginStart = dp(12) })
+            addView(savedMark, LayoutParams(wrap, wrap).apply { marginStart = dp(8) })
+            addView(box, LayoutParams(wrap, wrap).apply { marginStart = dp(2) })
+        }
+
+        override fun isChecked(): Boolean = on
+
+        override fun setChecked(checked: Boolean) {
+            on = checked
+            box.isChecked = checked
+            isActivated = checked
+        }
+
+        override fun toggle() = setChecked(!on)
     }
 
     private inner class ClipAdapter : BaseAdapter() {
@@ -318,13 +630,18 @@ class MainActivity : Activity() {
         override fun getItemId(position: Int): Long = position.toLong()
 
         override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val row = (convertView
-                ?: layoutInflater.inflate(android.R.layout.simple_list_item_multiple_choice, parent, false)) as TextView
+            val row = convertView as? ClipRow ?: ClipRow(this@MainActivity)
             val c = items[position]
-            val size = if (c.size >= 0) DownloadService.mb(c.size) + " MB" else "?"
-            val length = if (c.secs.isNotEmpty()) "${c.secs} s  " else ""
-            val mark = if (c.name in saved) "   ✓ saved" else ""
-            row.text = "${c.time}   ${c.name}\n${c.res}  $length$size$mark"
+            val photo = c.name.endsWith(".jpg", true) || c.name.endsWith(".jpeg", true)
+            row.icon.setImageResource(if (photo) R.drawable.ic_photo else R.drawable.ic_video)
+            row.title.text = c.time.ifEmpty { c.name }
+            val facts = ArrayList<String>()
+            facts.add(if (c.size >= 0) DownloadService.mb(c.size) + " MB" else "size unknown")
+            if (c.secs.isNotEmpty()) facts.add("${c.secs} s")
+            if (c.res.isNotEmpty()) facts.add(c.res)
+            facts.add(c.name)
+            row.sub.text = facts.joinToString("  ·  ")
+            row.savedMark.visibility = if (c.name in saved) View.VISIBLE else View.GONE
             return row
         }
     }
@@ -349,6 +666,41 @@ class MainActivity : Activity() {
     private fun describe(w: WifiInfo): String {
         val name = if (w.ssid == null || w.ssid == LinkCore.UNKNOWN_SSID) "(name hidden)" else w.ssid
         return "$name (${w.frequency} MHz, ${w.rssi} dBm)"
+    }
+
+    /** The first line is the headline; what follows explains it. Same words as ever, only dressed. */
+    private fun showStatus(text: String) {
+        if (status.text.toString() == text) return
+        val styled = SpannableString(text)
+        val end = text.indexOf('\n').let { if (it < 0) text.length else it }
+        styled.setSpan(ForegroundColorSpan(getColor(R.color.text)), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        styled.setSpan(AbsoluteSizeSpan(16, true), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        styled.setSpan(TypefaceSpan("sans-serif-medium"), 0, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        status.text = styled
+    }
+
+    /** The state of the link in one word, next to the app's name. */
+    private fun showPill(st: LinkState) {
+        val busy = st == LinkState.SEARCHING || st == LinkState.LOST || (st == LinkState.CONNECTED && !Link.ready)
+        val label: String
+        val fg: Int
+        val bg: Int
+        when {
+            Link.ready -> { label = "Connected"; fg = R.color.ok; bg = R.color.ok_soft }
+            st == LinkState.CONNECTED -> { label = "Connecting…"; fg = R.color.on_accent_soft; bg = R.color.accent_soft }
+            st == LinkState.SEARCHING -> { label = if (Link.reconnecting) "Reconnecting…" else "Searching…"; fg = R.color.on_accent_soft; bg = R.color.accent_soft }
+            st == LinkState.LOST -> { label = "Reconnecting…"; fg = R.color.on_accent_soft; bg = R.color.accent_soft }
+            st == LinkState.NOT_FOUND -> { label = "Not connected"; fg = R.color.warn; bg = R.color.warn_soft }
+            else -> { label = "Offline"; fg = R.color.idle; bg = R.color.idle_soft }
+        }
+        if (label != shownPill) {
+            shownPill = label
+            pill.text = label
+            pill.setTextColor(getColor(fg))
+            pill.backgroundTintList = tint(bg)
+        }
+        val want = if (busy) View.VISIBLE else View.GONE
+        if (spinner.visibility != want) spinner.visibility = want
     }
 
     private fun render() {
@@ -376,8 +728,17 @@ class MainActivity : Activity() {
         val others = otherWifi()
         sb.append("\nOther Wi-Fi on this phone: ")
         sb.append(if (others.isEmpty()) "none" else others.joinToString { describe(it) })
-        show(status, sb.toString())
-        show(connectBtn, if (Link.gone) "Connect" else "Disconnect")
+        showStatus(sb.toString())
+        showPill(st)
+
+        // The name and password are only on the screen while they are needed.
+        val gone = Link.gone
+        show(connectBtn, if (gone) "Connect" else "Disconnect")
+        if (gone != shownGone) {
+            shownGone = gone
+            fields.visibility = if (gone) View.VISIBLE else View.GONE
+            style(connectBtn, if (gone) FILLED else TONAL)
+        }
 
         // The camera's full name, once Android has told us, replaces whatever start of it was typed.
         val learned = Link.cameraSsid
@@ -386,15 +747,7 @@ class MainActivity : Activity() {
             if (ssid.text.toString() != learned) ssid.setText(learned)
         }
 
-        if (Browser.folders != shownFolders) {
-            shownFolders = Browser.folders
-            folderAdapter.clear()
-            folderAdapter.addAll(Browser.folders)
-        }
-        if (folderSpin.selectedItemPosition != Browser.folder && Browser.folder in Browser.folders.indices) {
-            folderSpin.setSelection(Browser.folder, false)
-        }
-        if (rearBox.isChecked != Browser.rear) rearBox.isChecked = Browser.rear
+        showFolders()
 
         if (Browser.clips !== shownClips) {
             shownClips = Browser.clips
@@ -406,6 +759,11 @@ class MainActivity : Activity() {
                 if (c.path in Browser.ticked) list.setItemChecked(i, true)
             }
         }
+        if (Browser.clips.isEmpty()) {
+            show(emptyTitle, if (Link.ready) "No clips here" else "No camera connected")
+            show(emptyText, if (Link.ready) Browser.note else "Connect to the camera to see its clips.")
+        }
+        showSelection()
         renderNotice()
         renderProgress()
     }
@@ -580,6 +938,7 @@ class MainActivity : Activity() {
         Browser.ticked.clear()
         list.clearChoices()
         clipAdapter.notifyDataSetChanged()
+        showSelection()
         if (startProblem == null) offerBatteryExemption()
         render()
     }
@@ -611,11 +970,16 @@ class MainActivity : Activity() {
             it.state == Jobs.DOWNLOADING || it.state == Jobs.WAITING || it.state == Jobs.SAVING
         }
         val sb = StringBuilder(Browser.note)
+        var boldFrom = -1
+        var boldTo = -1
         if (active != null) {
             val rate = String.format(Locale.US, "%.1f", active.bytesPerSec / 1048576.0)
-            sb.append("\n").append(active.clip.name).append("  ")
+            sb.append("\n")
+            boldFrom = sb.length
+            sb.append(active.clip.name).append("  ")
                 .append(DownloadService.mb(active.done)).append("/").append(DownloadService.mb(active.total))
                 .append(" MB  ").append(rate).append(" MB/s  — ").append(active.state)
+            boldTo = sb.length
         }
         val queued = jobs.count { it.state == Jobs.QUEUED && !it.cancel }
         val done = jobs.count { it.state == Jobs.SAVED }
@@ -627,7 +991,25 @@ class MainActivity : Activity() {
                 jobs.lastOrNull { it.state == Jobs.FAILED }?.lastError?.let { sb.append(" (").append(it).append(")") }
             }
         }
-        show(progress, sb.toString())
+        val text = sb.toString()
+        if (progress.text.toString() != text) {
+            val styled = SpannableString(text)
+            if (boldFrom >= 0) {
+                styled.setSpan(ForegroundColorSpan(getColor(R.color.text)), boldFrom, boldTo, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                styled.setSpan(TypefaceSpan("sans-serif-medium"), boldFrom, boldTo, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            progress.text = styled
+        }
+
+        // How far the current clip is, as a bar. Hidden when nothing is on its way or its size is not known.
+        val total = active?.total ?: 0L
+        if (active != null && total > 0) {
+            val permille = (active.done.coerceIn(0L, total) * 1000 / total).toInt()
+            if (bar.progress != permille) bar.progress = permille
+            if (bar.visibility != View.VISIBLE) bar.visibility = View.VISIBLE
+        } else if (bar.visibility != View.GONE) {
+            bar.visibility = View.GONE
+        }
     }
 
     // ---------------------------------------------------------------- once a second
@@ -694,5 +1076,10 @@ class MainActivity : Activity() {
     private companion object {
         const val ASK_FIRST = 1
         const val ASK_AGAIN = 2
+
+        // Kinds of button.
+        const val FILLED = 0
+        const val TONAL = 1
+        const val FLAT = 2
     }
 }

@@ -23,7 +23,9 @@
         android:allowBackup="false"
         android:dataExtractionRules="@xml/no_backup"
         android:label="DashLink"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true">
 
         <activity

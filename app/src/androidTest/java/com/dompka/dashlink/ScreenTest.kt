@@ -60,7 +60,15 @@ class ScreenTest {
         Kit.device.findObject(By.text(Pattern.compile(".*" + Pattern.quote(name) + ".*", Pattern.DOTALL)))
     }
 
-    private fun isTicked(name: String): Boolean = row(name).isChecked
+    /** Whether the row of [name] shows a tick: the box that sits in the same row as its texts. */
+    private fun isTicked(name: String): Boolean {
+        var node = row(name)
+        repeat(4) {
+            node = node.parent ?: return false
+            node.findObject(By.checkable(true))?.let { return it.isChecked }
+        }
+        return false
+    }
 
     /** How often the camera was asked for a file list. */
     private fun listings() = cam.requests.count { it.query["action"] == "dir" || it.query["action"] == "reardir" }
@@ -109,7 +117,6 @@ class ScreenTest {
             assertTrue(Kit.text("progress").contains("Normal: 3 files"))
             assertTrue("ticks survive", isTicked(names[0]) && isTicked(names[1]) && !isTicked(names[2]))
             assertEquals("DISCONNECT", Kit.text("connect").uppercase())
-            assertEquals("MiVue_Test", Kit.text("ssid"))
             SystemClock.sleep(1500)
             assertEquals("the camera was not asked for the list again", asked, listings())
 
@@ -118,6 +125,7 @@ class ScreenTest {
             Kit.until("the new screen to show the disconnect") { Kit.text("status").startsWith("Not connected to the camera.") }
             assertEquals(LinkState.IDLE, Link.state)
             assertEquals("CONNECT", Kit.text("connect").uppercase())
+            assertEquals("the name field is back, with the camera's full name", "MiVue_Test", Kit.text("ssid"))
         }
     }
 

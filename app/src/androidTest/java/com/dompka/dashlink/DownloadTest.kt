@@ -145,7 +145,9 @@ class DownloadTest {
             Kit.until("the pretend link to come up") { Link.ready }
             Kit.until("the camera's name to be shown") { Kit.text("status").contains("MiVue_Test at 192.72.1.1") }
             Kit.until("the model to be shown") { Kit.text("status").contains("MiVue 956W, firmware 1.0.test") }
-            assertEquals("the full name replaces the typed start of it", "MiVue_Test", Kit.text("ssid"))
+            Kit.until("the camera's full name to be kept instead of the typed start of it") {
+                Kit.ctx.getSharedPreferences("dashlink", Context.MODE_PRIVATE).getString("ssid", null) == "MiVue_Test"
+            }
             Kit.until("the list to be loaded") { Kit.text("progress").contains("Normal: 3 files") }
 
             Kit.tapText(".*${Regex.escape(a)}.*")

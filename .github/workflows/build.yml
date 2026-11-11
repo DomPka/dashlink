@@ -99,6 +99,7 @@ jobs:
             bash ci/smoke.sh release/app-debug.apk
             ./gradlew connectedDebugAndroidTest || touch emulator-tests-failed
             adb logcat -d -v threadtime > emulator-logcat.txt
+            adb pull /sdcard/Download/dashlink-shots screenshots || true
             python3 ci/report.py app/build/outputs/androidTest-results
             bash ci/crashes.sh emulator-logcat.txt
             test ! -f emulator-tests-failed
@@ -109,6 +110,7 @@ jobs:
           path: |
             app/build/outputs/androidTest-results
             app/build/reports/androidTests
+            screenshots
             smoke-logcat.txt
             emulator-logcat.txt
           if-no-files-found: ignore

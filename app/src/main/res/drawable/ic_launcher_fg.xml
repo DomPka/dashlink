@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A camera lens with Wi-Fi arcs above it. Everything sits inside the adaptive icon's safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M30.67,37.67A33,33 0 0,1 77.33,37.67"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeAlpha="0.55"
+        android:strokeLineCap="round"
+        android:strokeWidth="4.5" />
+    <path
+        android:pathData="M36.32,43.32A25,25 0 0,1 71.68,43.32"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeAlpha="0.8"
+        android:strokeLineCap="round"
+        android:strokeWidth="4.5" />
+    <path android:fillColor="#FFFFFFFF" android:pathData="M37,61a17,17 0 1,0 34,0a17,17 0 1,0 -34,0z" />
+    <path android:fillColor="#FF0B2F6B" android:pathData="M43,61a11,11 0 1,0 22,0a11,11 0 1,0 -22,0z" />
+    <path android:fillColor="#FF6EA8FE" android:pathData="M49,61a5,5 0 1,0 10,0a5,5 0 1,0 -10,0z" />
+    <path android:fillColor="#FFFFFFFF" android:fillAlpha="0.9" android:pathData="M47.6,55.4a2.2,2.2 0 1,0 4.4,0a2.2,2.2 0 1,0 -4.4,0z" />
+</vector>

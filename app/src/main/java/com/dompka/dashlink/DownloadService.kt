@@ -337,14 +337,18 @@ class DownloadService : Service() {
             Jobs.SAVING -> "$name  saving…"
             else -> return
         }
+        // A bar for the clip on its way; a moving one while waiting for the camera or saving.
+        val total = job.total
+        val permille = if (job.state == Jobs.DOWNLOADING && total > 0) (job.done.coerceIn(0L, total) * 1000 / total).toInt() else -1
         try {
-            getSystemService(NotificationManager::class.java).notify(NOTE_ID, notification(text))
+            getSystemService(NotificationManager::class.java).notify(NOTE_ID, notification(text, permille))
         } catch (e: Exception) {
             // a missed progress update is not worth a crash
         }
     }
 
-    private fun notification(text: String): Notification {
+    /** [permille]: how far the current clip is (0..1000), -1 for "busy, cannot say", null for no bar at all. */
+    private fun notification(text: String, permille: Int? = null): Notification {
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL) == null) {
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW))
@@ -352,14 +356,16 @@ class DownloadService : Service() {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+        val b = Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_download)
+            .setColor(getColor(R.color.accent))
             .setContentTitle("DashLink")
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
             .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-            .build()
+        if (permille != null) b.setProgress(1000, permille.coerceAtLeast(0), permille < 0)
+        return b.build()
     }
 }
