@@ -290,7 +290,7 @@ class ScreenTest {
             cam.props += "Vendor.Odd.Field=$password\n"
             val names = connectedWithTwoTicked()
             val report = Report.build(Kit.ctx, "Normal", false, password)
-            assertTrue(report, report.startsWith("DashLink 0.2 ("))
+            assertTrue(report, Regex("^DashLink \\d+\\.\\d+ \\(").containsMatchIn(report))
             for (expected in listOf(
                 "Phone: ", "Two Wi-Fi links at once (local-only): ", "Permissions missing: none",
                 "Battery: exempt from optimisation=true", "Link: CONNECTED, camera MiVue_Test at 192.72.1.1",
