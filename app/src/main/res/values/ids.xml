@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Names for the views MainActivity builds in code, so Android can save their state and tests can find them. -->
+<resources>
+    <item name="status" type="id" />
+    <item name="notice" type="id" />
+    <item name="notice_action" type="id" />
+    <item name="ssid" type="id" />
+    <item name="pass" type="id" />
+    <item name="connect" type="id" />
+    <item name="folder" type="id" />
+    <item name="rear" type="id" />
+    <item name="refresh" type="id" />
+    <item name="list" type="id" />
+    <item name="progress" type="id" />
+    <item name="download" type="id" />
+    <item name="stop" type="id" />
+    <item name="diag" type="id" />
+</resources>

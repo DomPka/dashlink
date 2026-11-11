@@ -7,13 +7,17 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
-import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Handler
 import android.os.Looper
 import android.os.PatternMatcher
-import java.net.Inet4Address
+import android.os.SystemClock
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.Proxy
+import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * The second Wi-Fi link, to the camera.
@@ -22,187 +26,175 @@ import java.util.concurrent.ConcurrentHashMap
  * phones with dual-Wi-Fi support comes up NEXT TO the Wi-Fi the phone is already using - e.g. the
  * car's wireless Android Auto link - instead of replacing it. Nothing in the process is bound to
  * it globally; Cam.kt opens its sockets on this Network explicitly.
+ *
+ * This file is only the Android side: it turns ConnectivityManager callbacks into calls on LinkCore,
+ * which holds the rules (retry, give up, camera address). Call everything here from the main thread.
  */
 object Link {
-    enum class State { IDLE, SEARCHING, CONNECTED, LOST, NOT_FOUND }
-
-    private class Want(val ssid: String, val pass: String, val exact: Boolean)
-
-    @Volatile var state = State.IDLE
-        private set
-    @Volatile var network: Network? = null
-        private set
-    @Volatile var cameraIp: String? = null
-        private set
-    @Volatile var cameraSsid: String? = null
-        private set
-    @Volatile var lastError: String? = null
-        private set
+    private val main = Handler(Looper.getMainLooper())
+    private var app: Context? = null
+    private var watching = false
+    private val listeners = CopyOnWriteArrayList<() -> Unit>()
 
     /** Every Wi-Fi network the phone currently holds (camera included), for the status line. */
     val wifiNets = ConcurrentHashMap<Network, NetworkCapabilities>()
 
-    /** Called on the main thread whenever anything above changes. */
-    var onChange: (() -> Unit)? = null
+    /** The system side of the link. Tests swap in a pretend one. */
+    @Volatile
+    internal var radio: LinkCore.Radio = SystemRadio()
 
-    private val main = Handler(Looper.getMainLooper())
-    private var app: Context? = null
-    private var watching = false
-    private var camCb: ConnectivityManager.NetworkCallback? = null
-    private var want: Want? = null
-    private var everConnected = false
-    private var retries = 0
-    private val retry = Runnable {
-        if (want != null && state != State.CONNECTED) {
-            release()
-            request()
-        }
+    internal val core = LinkCore(
+        object : LinkCore.Radio {
+            override fun request(request: LinkCore.Request, timeoutMs: Int) = radio.request(request, timeoutMs)
+            override fun release(request: LinkCore.Request) = radio.release(request)
+        },
+        object : LinkCore.Timer {
+            override fun now(): Long = SystemClock.elapsedRealtime()
+            override fun after(delayMs: Long, run: () -> Unit): Any = Runnable { run() }.also { main.postDelayed(it, delayMs) }
+            override fun cancel(token: Any) = main.removeCallbacks(token as Runnable)
+        },
+        ::changed
+    )
+
+    val state: LinkState get() = core.state
+    val network: Network? get() = core.network as? Network
+    val cameraIp: String? get() = core.cameraIp
+    val cameraSsid: String? get() = core.cameraSsid
+    val lastError: String? get() = core.lastError
+    val reconnecting: Boolean get() = core.reconnecting
+
+    /** True once requests can reach the camera. */
+    val ready: Boolean get() = core.state == LinkState.CONNECTED && core.cameraIp != null
+
+    /** Nothing is connected and nothing will try again by itself. */
+    val gone: Boolean get() = core.state == LinkState.IDLE || core.state == LinkState.NOT_FOUND
+
+    /** [listener] is called on the main thread whenever anything above changes. */
+    fun addListener(listener: () -> Unit) {
+        if (listener !in listeners) listeners.add(listener)
+    }
+
+    fun removeListener(listener: () -> Unit) {
+        listeners.remove(listener)
+    }
+
+    private fun changed() {
+        for (l in listeners) l()
     }
 
     private fun cm(c: Context) = c.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
     fun init(ctx: Context) {
-        app = ctx.applicationContext
+        if (app == null) app = ctx.applicationContext
         if (watching) return
-        watching = true
-        val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
-        val cb = object : ConnectivityManager.NetworkCallback(
-            ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
-        ) {
-            override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
-                wifiNets[n] = caps
-                onChange?.invoke()
-            }
-
-            override fun onLost(n: Network) {
-                wifiNets.remove(n)
-                onChange?.invoke()
-            }
+        try {
+            val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
+            cm(ctx).registerNetworkCallback(req, watcher, main)
+            watching = true
+        } catch (e: Exception) {
+            // Only the "other Wi-Fi" part of the status line depends on this; it is tried again on the next init().
         }
-        cm(ctx).registerNetworkCallback(req, cb, main)
+    }
+
+    private val watcher = object : ConnectivityManager.NetworkCallback(
+        ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
+    ) {
+        override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
+            wifiNets[n] = caps
+            changed()
+        }
+
+        override fun onLost(n: Network) {
+            wifiNets.remove(n)
+            changed()
+        }
     }
 
     /** [ssid] is the camera's Wi-Fi name, or just the start of it unless [exact]. */
     fun connect(ctx: Context, ssid: String, pass: String, exact: Boolean) {
         init(ctx)
-        main.removeCallbacks(retry)
-        release()
-        want = Want(ssid, pass, exact)
-        everConnected = false
-        retries = 0
-        request()
+        core.connect(ssid, pass, exact)
     }
 
-    fun disconnect() {
-        want = null
-        main.removeCallbacks(retry)
-        release()
-        moveTo(State.IDLE)
+    fun disconnect() = core.disconnect()
+
+    /** Opens [pathAndQuery] on the camera, over the camera's own network whatever the phone's main Wi-Fi is. */
+    @Throws(IOException::class)
+    fun open(pathAndQuery: String): HttpURLConnection {
+        val net = network ?: throw IOException("not connected to the camera")
+        val host = cameraIp ?: throw IOException("camera address not known yet")
+        // Straight to the camera: a proxy configured for the phone's other networks must not get in the way.
+        return net.openConnection(URL("http://$host$pathAndQuery"), Proxy.NO_PROXY) as HttpURLConnection
     }
 
-    private fun request() {
-        val ctx = app ?: return
-        val w = want ?: return
-        val spec = WifiNetworkSpecifier.Builder()
-            .setSsidPattern(
-                PatternMatcher(w.ssid, if (w.exact) PatternMatcher.PATTERN_LITERAL else PatternMatcher.PATTERN_PREFIX)
-            )
-            .setWpa2Passphrase(w.pass)
-            .build()
-        val req = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .setNetworkSpecifier(spec)
-            .build()
-        val cb = object : ConnectivityManager.NetworkCallback(
+    /** The real thing: WifiNetworkSpecifier requests through ConnectivityManager. */
+    private class SystemRadio : LinkCore.Radio {
+        private val callbacks = HashMap<LinkCore.Request, Callback>()
+
+        private inner class Callback(val r: LinkCore.Request) : ConnectivityManager.NetworkCallback(
             ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
         ) {
+            var net: Network? = null
+
             override fun onAvailable(n: Network) {
-                network = n
-                everConnected = true
-                retries = 0
-                moveTo(State.CONNECTED)
+                net = n
+                core.onAvailable(r, n)
             }
 
             override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
+                if (callbacks[r] !== this) return
                 wifiNets[n] = caps
-                val name = (caps.transportInfo as? WifiInfo)?.ssid?.trim('"')
-                if (!name.isNullOrEmpty() && name != WifiManager.UNKNOWN_SSID) cameraSsid = name
-                onChange?.invoke()
+                core.onSsid(r, (caps.transportInfo as? WifiInfo)?.ssid)
+                changed()
             }
 
             override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
-                pickIp(lp)?.let { cameraIp = it }
-                onChange?.invoke()
+                core.onAddresses(
+                    r,
+                    lp.dhcpServerAddress,
+                    lp.routes.filter { it.hasGateway() }.mapNotNull { it.gateway },
+                    lp.linkAddresses.map { it.address }
+                )
             }
 
-            override fun onUnavailable() {
-                // Timed out, or the system prompt was declined. Android has already dropped the request.
-                camCb = null
-                moveTo(State.NOT_FOUND)
-                retryLater()
-            }
+            override fun onUnavailable() = core.onUnavailable(r)
 
             override fun onLost(n: Network) {
                 wifiNets.remove(n)
-                if (network == n) {
-                    network = null
-                    cameraIp = null
-                }
-                moveTo(State.LOST)
-                retryLater()
+                core.onLost(r)
             }
         }
-        camCb = cb
-        lastError = null
-        moveTo(State.SEARCHING)
-        try {
-            cm(ctx).requestNetwork(req, cb, main, 45_000)
-        } catch (e: Exception) {
-            // e.g. the "nearby devices" permission was refused
-            camCb = null
-            lastError = e.javaClass.simpleName + ": " + e.message
-            moveTo(State.NOT_FOUND)
+
+        override fun request(request: LinkCore.Request, timeoutMs: Int) {
+            val ctx = app ?: throw IllegalStateException("Link.init() was not called")
+            val w = request.want
+            // The builder itself rejects some input (a passphrase that is not plain ASCII, an empty name);
+            // that is reported like any other refusal instead of crashing the app.
+            val spec = WifiNetworkSpecifier.Builder()
+                .setSsidPattern(
+                    PatternMatcher(w.ssid, if (w.exact) PatternMatcher.PATTERN_LITERAL else PatternMatcher.PATTERN_PREFIX)
+                )
+                .setWpa2Passphrase(w.pass)
+                .build()
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .setNetworkSpecifier(spec)
+                .build()
+            val cb = Callback(request)
+            cm(ctx).requestNetwork(req, cb, main, timeoutMs)
+            callbacks[request] = cb
         }
-    }
 
-    /** The camera is the DHCP server / gateway of its own little network. */
-    private fun pickIp(lp: LinkProperties): String? {
-        lp.dhcpServerAddress?.hostAddress?.let { if (it != "0.0.0.0") return it }
-        for (r in lp.routes) {
-            val gw = r.gateway
-            if (r.hasGateway() && gw is Inet4Address) gw.hostAddress?.let { return it }
-        }
-        val own = lp.linkAddresses.map { it.address }.firstOrNull { it is Inet4Address }?.hostAddress ?: return null
-        return own.substringBeforeLast('.') + ".1"
-    }
-
-    /** Only re-request by itself after a link that worked; never loop on a declined prompt. */
-    private fun retryLater() {
-        if (want == null || !everConnected || retries >= 20) return
-        retries++
-        main.removeCallbacks(retry)
-        main.postDelayed(retry, 3000)
-    }
-
-    private fun release() {
-        val ctx = app
-        val cb = camCb
-        if (ctx != null && cb != null) {
+        override fun release(request: LinkCore.Request) {
+            val cb = callbacks.remove(request) ?: return
+            cb.net?.let { wifiNets.remove(it) }
+            val ctx = app ?: return
             try {
                 cm(ctx).unregisterNetworkCallback(cb)
             } catch (e: Exception) {
-                // already released
+                // Android had already dropped it (after onUnavailable)
             }
         }
-        camCb = null
-        network?.let { wifiNets.remove(it) }
-        network = null
-        cameraIp = null
-    }
-
-    private fun moveTo(s: State) {
-        state = s
-        onChange?.invoke()
     }
 }

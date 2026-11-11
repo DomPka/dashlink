@@ -5,222 +5,319 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
-import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
-import android.provider.MediaStore
-import java.io.File
-import java.io.IOException
 import java.util.Locale
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.concurrent.thread
+import java.util.concurrent.Executors
 
 /**
  * Works through the download queue as a foreground service, so it keeps going with the screen off.
- * A dropped link is not an error here: the job waits and continues from the byte it stopped at.
+ * A dropped link is not an error here: the job waits and continues from the byte it stopped at
+ * (the rules for that are in Runner.kt; this class is the Android shell around them).
  */
 class DownloadService : Service() {
 
-    class Job(val clip: Cam.Clip) {
-        @Volatile var done = 0L
-        @Volatile var state = QUEUED
-        @Volatile var cancel = false
-        @Volatile var bytesPerSec = 0L
-        @Volatile var lastError: String? = null
-    }
-
     companion object {
-        const val QUEUED = "queued"
-        const val DOWNLOADING = "downloading"
-        const val WAITING = "waiting for camera"
-        const val SAVING = "saving"
-        const val SAVED = "saved"
-        const val FAILED = "failed"
-        const val CANCELLED = "stopped"
+        private const val NOTE_ID = 1
+        private const val CHANNEL = "downloads"
 
-        val jobs = CopyOnWriteArrayList<Job>()
+        /** A wake lock is never held longer than this without being renewed by progress. */
+        private const val WAKE_MS = 10 * 60 * 1000L
 
-        private fun open(j: Job) = j.state == QUEUED || j.state == DOWNLOADING || j.state == WAITING || j.state == SAVING
+        /** The queue is being worked on right now. */
+        @Volatile
+        var working = false
+            private set
 
-        fun enqueue(ctx: Context, clips: List<Cam.Clip>) {
-            for (c in clips) {
-                if (jobs.none { it.clip.path == c.path && open(it) }) jobs.add(Job(c))
-            }
-            ctx.startForegroundService(Intent(ctx, DownloadService::class.java))
+        /** Why the service is not running in the foreground although it should be. Null when all is well. */
+        @Volatile
+        var foregroundError: String? = null
+            private set
+
+        /** Wake lock or Wi-Fi lock currently held (for tests and the diagnostics report). */
+        @Volatile
+        var locksHeld = false
+            private set
+
+        /** One thread does all downloading and all file clean-up, in order. */
+        private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "dashlink-downloads") }
+
+        private fun prefs(ctx: Context) = ctx.getSharedPreferences("dashlink", Context.MODE_PRIVATE)
+
+        /** Loads the queue a previous run left behind. Call once, when the process starts. */
+        fun restore(ctx: Context) {
+            val app = ctx.applicationContext
+            val p = prefs(app)
+            Jobs.restore(p.getString("queue", null), p.getBoolean("working", false))
+            p.edit().putBoolean("working", false).apply()
+            Jobs.saver = { text -> prefs(app).edit().putString("queue", text).apply() }
         }
 
-        fun stopAll() {
-            for (j in jobs) if (open(j)) j.cancel = true
+        /** Queues [clips] and gets the service going. Returns what Android said if it refused, else null. */
+        fun enqueue(ctx: Context, clips: List<Cam.Clip>): String? {
+            Jobs.add(clips)
+            return start(ctx)
+        }
+
+        /**
+         * Starts (or continues) work on the queue. Only call while the app is on screen: Android
+         * does not let an app in the background start a foreground service.
+         */
+        fun start(ctx: Context): String? {
+            Jobs.paused = null
+            Jobs.pausedByLink = false
+            Jobs.interrupted = false
+            return try {
+                ctx.startForegroundService(Intent(ctx, DownloadService::class.java))
+                null
+            } catch (e: Exception) {
+                // ForegroundServiceStartNotAllowedException, SecurityException, …
+                Cam.describe(e)
+            }
+        }
+
+        /** Stops everything. Half-downloaded files are deleted, also those of jobs that never got to run. */
+        fun stopAll(ctx: Context) {
+            Jobs.cancelAll()
+            val app = ctx.applicationContext
+            worker.execute {
+                try {
+                    tidy(MediaFiles(app))
+                } catch (t: Throwable) {
+                    // nothing to tidy with; the next run sweeps
+                }
+            }
+        }
+
+        /** Marks stopped-while-queued jobs as stopped and removes every unfinished file nobody will continue. */
+        private fun tidy(files: MediaFiles) {
+            for (j in Jobs.all) {
+                if (j.cancel && j.state == Jobs.QUEUED) {
+                    files.discard(j)
+                    j.state = Jobs.CANCELLED
+                }
+            }
+            files.sweep(Jobs.dests())
+            Jobs.save()
         }
 
         fun savedNames(ctx: Context): Set<String> =
-            ctx.getSharedPreferences("dashlink", Context.MODE_PRIVATE).getStringSet("saved", emptySet()) ?: emptySet()
+            prefs(ctx).getStringSet("saved", emptySet()) ?: emptySet()
 
         fun mb(bytes: Long): String = String.format(Locale.US, "%.0f", bytes / 1048576.0)
     }
 
     private val main = Handler(Looper.getMainLooper())
-    private var worker: Thread? = null
+    private var lastStartId = 0
+    private var busy = false                    // a work() run is queued or running; main thread only
+    @Volatile private var destroyed = false
+    private var wake: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        startForeground(1, notification("Starting…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
-        if (worker == null) startWorker()
+        lastStartId = startId
+        // First thing, always: Android allows only a few seconds between startForegroundService() and this.
+        goForeground()
+        if (!busy) {
+            busy = true
+            working = true
+            worker.execute { work() }
+        }
         return START_NOT_STICKY
     }
 
-    private fun next(): Job? = jobs.firstOrNull { it.state == QUEUED && !it.cancel }
+    override fun onDestroy() {
+        destroyed = true
+        dropLocks()
+        super.onDestroy()
+    }
 
-    private fun startWorker() {
-        worker = thread(name = "dashlink-downloads") { work() }
+    private fun goForeground() {
+        try {
+            startForeground(NOTE_ID, notification("Starting…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            foregroundError = null
+        } catch (e: Exception) {
+            // ForegroundServiceStartNotAllowedException (started from the background), SecurityException
+            // (a requirement of the "connected device" type is not met), … The downloads still run while
+            // the app is on screen; the screen says that they are not protected.
+            foregroundError = Cam.describe(e)
+        }
     }
 
     private fun work() {
-        val wake = (getSystemService(Context.POWER_SERVICE) as PowerManager)
-            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dashlink:downloads")
-        @Suppress("DEPRECATION")
-        val wifiLock = (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
-            .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "dashlink:downloads")
-        wake.acquire(6 * 60 * 60 * 1000L)
-        wifiLock.acquire()
         try {
-            while (true) {
-                val job = next() ?: break
-                runJob(job)
-            }
-        } finally {
-            if (wifiLock.isHeld) wifiLock.release()
-            if (wake.isHeld) wake.release()
-            // Hand back to the main thread, where onStartCommand also runs, so a job queued right now is not missed.
-            main.post {
-                worker = null
-                if (next() != null) {
-                    startWorker()
-                } else {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
-                }
-            }
-        }
-    }
-
-    private fun runJob(job: Job) {
-        val dir = File(getExternalFilesDir(null), "partial")
-        dir.mkdirs()
-        val tmp = File(dir, job.clip.name)
-        var stalls = 0
-        var markTime = SystemClock.elapsedRealtime()
-        var markBytes = if (tmp.exists()) tmp.length() else 0L
-        while (!job.cancel) {
-            val before = if (tmp.exists()) tmp.length() else 0L
-            try {
-                job.state = DOWNLOADING
-                Cam.download(job.clip, tmp, { job.cancel }) { have, total ->
-                    job.done = have
-                    val now = SystemClock.elapsedRealtime()
-                    if (now - markTime >= 1000) {
-                        job.bytesPerSec = (have - markBytes) * 1000 / (now - markTime)
-                        markTime = now
-                        markBytes = have
-                        notify("${job.clip.name}  ${mb(have)}/${mb(total)} MB")
+            prefs(this).edit().putBoolean("working", true).apply()
+            holdLocks()
+            val files = MediaFiles(this)
+            tidy(files)
+            val runner = Runner(
+                source = Cam::download,
+                store = files,
+                clock = object : Runner.Clock {
+                    override fun now(): Long = SystemClock.elapsedRealtime()
+                    override fun sleep(ms: Long) = Thread.sleep(ms)
+                },
+                linkGone = { Link.gone },
+                halt = { destroyed },
+                changed = ::jobChanged
+            )
+            while (!destroyed && Jobs.paused == null) {
+                val job = Jobs.next() ?: break
+                when (runner.run(job)) {
+                    Runner.Result.SAVED -> remember(job.clip.name)
+                    Runner.Result.PAUSED -> if (!destroyed) {
+                        Jobs.pausedByLink = true
+                        Jobs.paused = "Downloads paused: the camera is out of reach. They continue when it is connected again."
                     }
+                    Runner.Result.STORAGE -> {
+                        Jobs.pausedByLink = false
+                        Jobs.paused = "Downloads paused: " + (job.lastError ?: "the phone could not store the file") + "."
+                    }
+                    else -> Unit
                 }
-                job.state = SAVING
-                publish(tmp, job.clip.name)
-                val prefs = getSharedPreferences("dashlink", Context.MODE_PRIVATE)
-                prefs.edit().putStringSet("saved", savedNames(this) + job.clip.name).apply()
-                job.done = job.clip.size.coerceAtLeast(job.done)
-                job.state = SAVED
-                return
-            } catch (e: Exception) {
-                if (job.cancel) break
-                job.lastError = e.javaClass.simpleName + ": " + e.message
-                job.bytesPerSec = 0
-                // Give up only after ~10 minutes with no new bytes at all.
-                val after = if (tmp.exists()) tmp.length() else 0L
-                stalls = if (after > before) 0 else stalls + 1
-                if (stalls > 200) {
-                    job.state = FAILED
-                    return
-                }
-                job.state = WAITING
-                notify("${job.clip.name}  waiting for the camera…")
-                try {
-                    Thread.sleep(3000)
-                } catch (ie: InterruptedException) {
-                    break
-                }
-                markTime = SystemClock.elapsedRealtime()
-                markBytes = after
+                Jobs.save()
             }
+            tidy(files)
+        } catch (t: Throwable) {
+            // Whatever it was, it must not take the whole app down. The clips stay queued.
+            Jobs.pausedByLink = false
+            Jobs.paused = "Downloads stopped unexpectedly (${Cam.describe(t)})."
+        } finally {
+            dropLocks()
+            try {
+                prefs(this).edit().putBoolean("working", false).apply()
+            } catch (t: Throwable) {
+                // the flag only feeds a hint on the next start
+            }
+            // Hand back to the main thread, where onStartCommand also runs, so a job queued right now is not missed.
+            main.post { handOver() }
         }
-        job.state = CANCELLED      // the partial file stays, so queuing the clip again resumes it
     }
 
-    /** Moves a finished file into the shared Movies/Pictures folder so the Gallery sees it. */
-    private fun publish(tmp: File, name: String) {
-        val lower = name.lowercase(Locale.US)
-        val values = ContentValues()
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-        values.put(MediaStore.MediaColumns.IS_PENDING, 1)
-        val collection = when {
-            lower.endsWith(".mp4") || lower.endsWith(".mov") || lower.endsWith(".ts") -> {
-                values.put(MediaStore.MediaColumns.MIME_TYPE, if (lower.endsWith(".ts")) "video/mp2t" else "video/mp4")
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/DashLink")
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            }
-            lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> {
-                values.put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/DashLink")
-                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            }
-            else -> {
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/DashLink")
-                MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            }
+    private fun handOver() {
+        busy = false
+        if (destroyed) {
+            working = false
+            return
         }
-        val uri = contentResolver.insert(collection, values) ?: throw IOException("could not create $name in shared storage")
+        if (Jobs.paused == null && Jobs.hasWork()) {
+            busy = true
+            worker.execute { work() }
+            return
+        }
+        working = false
+        // Not plain stopSelf(): if startForegroundService() was called a moment ago and its start has not
+        // been delivered yet, stopping now would crash the app ("did not then call startForeground").
+        // With the start id, Android ignores the stop in that case and onStartCommand runs next.
+        stopSelfResult(lastStartId)
+    }
+
+    private fun remember(name: String) {
+        val p = prefs(this)
+        p.edit().putStringSet("saved", savedNames(this) + name).apply()
+    }
+
+    // ---------------------------------------------------------------- locks
+
+    @Synchronized
+    private fun holdLocks() {
         try {
-            val out = contentResolver.openOutputStream(uri) ?: throw IOException("could not open $name in shared storage")
-            out.use { o -> tmp.inputStream().use { it.copyTo(o, 1 shl 20) } }
-            val ready = ContentValues()
-            ready.put(MediaStore.MediaColumns.IS_PENDING, 0)
-            contentResolver.update(uri, ready, null, null)
+            val w = wake ?: (getSystemService(Context.POWER_SERVICE) as PowerManager)
+                .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "dashlink:downloads")
+                .also {
+                    it.setReferenceCounted(false)
+                    wake = it
+                }
+            // Always with a time limit, renewed while there is progress: it cannot outlive a hung download.
+            w.acquire(WAKE_MS)
         } catch (e: Exception) {
-            contentResolver.delete(uri, null, null)
-            throw e
+            // without it the download may stall with the screen off, but it still works with the screen on
         }
-        tmp.delete()
+        try {
+            @Suppress("DEPRECATION")
+            val l = wifiLock ?: (applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
+                .createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "dashlink:downloads")
+                .also {
+                    it.setReferenceCounted(false)
+                    wifiLock = it
+                }
+            l.acquire()
+        } catch (e: Exception) {
+            // same
+        }
+        locksHeld = true
     }
 
-    private fun notify(text: String) {
-        getSystemService(NotificationManager::class.java).notify(1, notification(text))
+    @Synchronized
+    private fun dropLocks() {
+        try {
+            wake?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            // it had already timed out
+        }
+        try {
+            wifiLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            // already released
+        }
+        locksHeld = false
+    }
+
+    @Synchronized
+    private fun renewWakeLock() {
+        if (!locksHeld) return
+        try {
+            wake?.acquire(WAKE_MS)
+        } catch (e: Exception) {
+            // keep what we have
+        }
+    }
+
+    // ---------------------------------------------------------------- notification
+
+    /** Called from the download thread whenever a job moved on; about once a second while bytes flow. */
+    private fun jobChanged(job: Job) {
+        if (destroyed) return
+        renewWakeLock()
+        val name = job.clip.name
+        val text = when (job.state) {
+            Jobs.DOWNLOADING -> "$name  ${mb(job.done)}/${mb(job.total)} MB"
+            Jobs.WAITING -> "$name  waiting for the camera…"
+            Jobs.SAVING -> "$name  saving…"
+            else -> return
+        }
+        try {
+            getSystemService(NotificationManager::class.java).notify(NOTE_ID, notification(text))
+        } catch (e: Exception) {
+            // a missed progress update is not worth a crash
+        }
     }
 
     private fun notification(text: String): Notification {
         val nm = getSystemService(NotificationManager::class.java)
-        if (nm.getNotificationChannel("downloads") == null) {
-            nm.createNotificationChannel(NotificationChannel("downloads", "Downloads", NotificationManager.IMPORTANCE_LOW))
+        if (nm.getNotificationChannel(CHANNEL) == null) {
+            nm.createNotificationChannel(NotificationChannel(CHANNEL, "Downloads", NotificationManager.IMPORTANCE_LOW))
         }
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, "downloads")
+        return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
             .setContentTitle("DashLink")
             .setContentText(text)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(open)
+            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 }

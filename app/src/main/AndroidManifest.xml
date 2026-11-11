@@ -15,8 +15,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Lets the app open Android's own "allow background activity?" question (Samsung stops long downloads otherwise). -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
+        android:name=".App"
         android:allowBackup="false"
         android:label="DashLink"
         android:theme="@android:style/Theme.DeviceDefault.DayNight"
