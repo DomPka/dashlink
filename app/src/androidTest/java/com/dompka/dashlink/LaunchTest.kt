@@ -229,8 +229,7 @@ class LaunchTest {
             // The screen notices before bothering Android...
             Kit.type("ssid", "DashLinkNoSuchCam")
             Kit.type("pass", "12345678")
-            Kit.tap("connect")
-            Kit.see(".*Wi-Fi is switched off.*")
+            Kit.tapUntil("connect", "the warning that Wi-Fi is off") { Kit.find(".*Wi-Fi is switched off.*") != null }
             Kit.dialogButton(positive = false)
             assertEquals(LinkState.IDLE, Link.state)
             assertEquals(0, Link.core.requests)
