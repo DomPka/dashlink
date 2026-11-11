@@ -16,6 +16,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Works through the download queue as a foreground service, so it keeps going with the screen off.
@@ -31,10 +32,11 @@ class DownloadService : Service() {
         /** A wake lock is never held longer than this without being renewed by progress. */
         private const val WAKE_MS = 10 * 60 * 1000L
 
+        /** Runs of the queue that are scheduled or under way (more than one only while an old service instance winds down). */
+        private val runs = AtomicInteger()
+
         /** The queue is being worked on right now. */
-        @Volatile
-        var working = false
-            private set
+        val working: Boolean get() = runs.get() > 0
 
         /** Why the service is not running in the foreground although it should be. Null when all is well. */
         @Volatile
@@ -140,7 +142,7 @@ class DownloadService : Service() {
         goForeground()
         if (!busy) {
             busy = true
-            working = true
+            runs.incrementAndGet()
             worker.execute { work() }
         }
         return START_NOT_STICKY
@@ -183,7 +185,7 @@ class DownloadService : Service() {
                     override fun now(): Long = SystemClock.elapsedRealtime()
                     override fun sleep(ms: Long) = Thread.sleep(ms)
                 },
-                linkGone = { Link.gone },
+                link = { Link.state },
                 halt = { destroyed },
                 changed = ::jobChanged
             )
@@ -221,17 +223,13 @@ class DownloadService : Service() {
     }
 
     private fun handOver() {
+        if (!destroyed && Jobs.paused == null && Jobs.hasWork()) {
+            worker.execute { work() }           // still the same run: something was queued in the meantime
+            return
+        }
         busy = false
-        if (destroyed) {
-            working = false
-            return
-        }
-        if (Jobs.paused == null && Jobs.hasWork()) {
-            busy = true
-            worker.execute { work() }
-            return
-        }
-        working = false
+        runs.decrementAndGet()
+        if (destroyed) return
         // Not plain stopSelf(): if startForegroundService() was called a moment ago and its start has not
         // been delivered yet, stopping now would crash the app ("did not then call startForeground").
         // With the start id, Android ignores the stop in that case and onStartCommand runs next.

@@ -132,6 +132,26 @@ ui absent id=permission_deny_button || die "the permission question came back on
 ui expect id=notice "Location" 10 || die "the notice about missing permissions is gone"
 alive "after the second start"
 
+step "4. A download queue left behind by a killed process is back after a restart"
+adb shell am force-stop "$PKG"
+# Written the way the app writes it: two clips still queued, and the note that work was under way.
+adb shell "run-as $PKG sh -c 'mkdir -p shared_prefs && cat > shared_prefs/dashlink.xml'" <<'XML' || die "could not plant the saved queue"
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="queue">/SD/Normal/F/SMOKE1.MP4&#9;1000&#9;2026-01-01 00:00:00&#9;1920x1080&#9;60&#9;&#10;/SD/Normal/F/SMOKE2.MP4&#9;2000&#9;2026-01-01 00:01:00&#9;1920x1080&#9;60&#9;</string>
+    <boolean name="working" value="true" />
+    <boolean name="askedPermissions" value="true" />
+</map>
+XML
+launch
+ui expect id=notice "2 download\(s\) were cut off" 60 || die "the interrupted downloads are not reported after the restart"
+ui expect id=progress "2 queued, 0 saved" 15 || die "the queue did not come back"
+alive "after restoring a queue"
+ui tap id=stop || die "no Stop button"
+ui expect id=progress "0 queued, 0 saved" 15 || die "Stop did not empty the restored queue"
+ui expect id=notice "Location" 15 || die "the notice did not return to the missing permissions"
+alive "after stopping a restored queue"
+
 adb shell am force-stop "$PKG"
 finish || exit 1
 adb uninstall "$PKG" > /dev/null 2>&1

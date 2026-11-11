@@ -110,6 +110,7 @@ internal object Browser {
     fun load() {
         val g = gen.incrementAndGet()
         if (!Link.ready) {
+            if (clips.isEmpty()) note = "Connect to the camera to see its files."
             changed()
             return
         }

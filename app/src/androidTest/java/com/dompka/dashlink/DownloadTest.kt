@@ -68,6 +68,7 @@ class DownloadTest {
             !DownloadService.alive && !DownloadService.working && !DownloadService.locksHeld
         }
         assertNull(DownloadService.foregroundError)
+        assertEquals("Android no longer lists the wake lock", emptyList<String>(), Kit.wakeLocksHeld())
     }
 
     // ---------------------------------------------------------------- start and stop
@@ -117,10 +118,15 @@ class DownloadTest {
         Kit.holds("the download goes on without the screen", 1500) {
             DownloadService.alive && DownloadService.locksHeld && job(a)?.state == Jobs.DOWNLOADING
         }
+        // Not only the app's own bookkeeping: Android's lists of held locks.
+        assertEquals("the wake lock is held while downloading", 1, Kit.wakeLocksHeld().size)
+        Kit.wifiLocksHeld()?.let { assertEquals("the Wi-Fi lock is held while downloading", 1, it.size) }
 
         assertTrue(Kit.ctx.stopService(Intent(Kit.ctx, DownloadService::class.java)))
         Kit.until("the service to be gone", 20_000) { !DownloadService.alive && !DownloadService.working }
         assertFalse("wake lock and Wi-Fi lock are released", DownloadService.locksHeld)
+        assertEquals("Android no longer lists the wake lock", emptyList<String>(), Kit.wakeLocksHeld())
+        Kit.wifiLocksHeld()?.let { assertEquals("Android no longer lists the Wi-Fi lock", emptyList<String>(), it) }
         assertEquals("the clip is still wanted", Jobs.QUEUED, job(a)!!.state)
         assertEquals("its unfinished file is kept", 1, Kit.stored(tag).count { it.pending })
     }

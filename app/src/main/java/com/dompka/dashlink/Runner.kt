@@ -11,8 +11,8 @@ internal class Runner(
     private val source: Source,
     private val store: Store,
     private val clock: Clock,
-    /** The link is down and nothing is trying to bring it back. */
-    private val linkGone: () -> Boolean,
+    /** What the camera link is doing right now. */
+    private val link: () -> LinkState,
     /** The whole queue should stop now (the service is going away); the job stays queued. */
     private val halt: () -> Boolean,
     /** Called when a job's state or progress changed (at most about once a second while downloading). */
@@ -61,7 +61,7 @@ internal class Runner(
         var restarts = 0
         var refusals = 0
         var best = job.done                     // only getting past this counts as progress
-        var lastProgress = clock.now()
+        var silentSince = clock.now()           // how long the camera has been connected without sending anything new
         while (true) {
             if (job.cancel) return cancelled(job)
             if (halt()) return requeue(job, Result.PAUSED)
@@ -92,7 +92,7 @@ internal class Runner(
                     val now = clock.now()
                     if (got > best) {
                         best = got
-                        lastProgress = now
+                        silentSince = now
                         refusals = 0
                     }
                     if (now - markTime >= 1000) {
@@ -131,7 +131,15 @@ internal class Runner(
                     }
                 }
                 // Anything else is the link. A dropped link is not an error: wait, then continue from the byte it stopped at.
-                if (linkGone() || clock.now() - lastProgress >= AWAY_MS) return requeue(job, Result.PAUSED)
+                // How long to wait depends on what the link is doing:
+                //  - nobody is trying to bring it back (disconnected, or it gave up): stop now;
+                //  - it is being re-established: that has its own limit (see LinkCore), so just wait for it;
+                //  - it is up but the camera sends nothing new: give it AWAY_MS, then stop.
+                when (link()) {
+                    LinkState.IDLE, LinkState.NOT_FOUND -> return requeue(job, Result.PAUSED)
+                    LinkState.LOST, LinkState.SEARCHING -> silentSince = clock.now()
+                    LinkState.CONNECTED -> if (clock.now() - silentSince >= AWAY_MS) return requeue(job, Result.PAUSED)
+                }
                 job.state = Jobs.WAITING
                 changed(job)
                 try {
@@ -188,7 +196,7 @@ internal class Runner(
     companion object {
         const val RETRY_MS = 3_000L
 
-        /** Stop the queue after this long without a single new byte (the camera is off or out of range). */
+        /** Stop the queue when the camera has been connected this long without a single new byte arriving. */
         const val AWAY_MS = 10 * 60 * 1000L
 
         const val MAX_RESTARTS = 3

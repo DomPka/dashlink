@@ -135,6 +135,8 @@ object Jobs {
         return out
     }
 
+    /** One writer at a time, so an older picture of the queue can never overwrite a newer one. */
+    @Synchronized
     fun save() {
         val s = saver ?: return
         try {

@@ -89,7 +89,7 @@ class RunnerTest {
     private lateinit var store: FakeStore
     private lateinit var clock: FakeClock
     private val states = ArrayList<String>()
-    private var linkGone = false
+    private var link = LinkState.CONNECTED
     private var halt = false
     private val name = "FILE240101-120000F.MP4"
     private val path = "/SD/Normal/F/$name"
@@ -102,7 +102,7 @@ class RunnerTest {
         store = FakeStore()
         clock = FakeClock()
         states.clear()
-        linkGone = false
+        link = LinkState.CONNECTED
         halt = false
     }
 
@@ -115,7 +115,7 @@ class RunnerTest {
     }
 
     private fun runner(source: Runner.Source = Runner.Source(Cam::download)) = Runner(
-        source, store, clock, { linkGone }, { halt }
+        source, store, clock, { link }, { halt }
     ) { job -> if (states.lastOrNull() != job.state) states.add(job.state) }
 
     private fun fileRequests() = cam.fileRequests().size
@@ -200,13 +200,67 @@ class RunnerTest {
     @Test
     fun linkGoneForGood_pausesAtOnce() {
         // The user disconnected, or the link gave up reconnecting: nothing will bring the camera back by itself.
-        linkGone = true
         Cam.opener = Cam.Opener { throw IOException("not connected to the camera") }
-        val job = Job(Cam.Clip(path, 5000, "", "", ""))
-        assertEquals(Runner.Result.PAUSED, runner().run(job))
-        assertEquals(Jobs.QUEUED, job.state)
-        assertEquals(0, clock.sleeps)
-        assertEquals("IOException: not connected to the camera", job.lastError)
+        for (state in listOf(LinkState.IDLE, LinkState.NOT_FOUND)) {
+            link = state
+            clock.sleeps = 0
+            val job = Job(Cam.Clip(path, 5000, "", "", ""))
+            assertEquals(Runner.Result.PAUSED, runner().run(job))
+            assertEquals(Jobs.QUEUED, job.state)
+            assertEquals(0, clock.sleeps)
+            assertEquals("IOException: not connected to the camera", job.lastError)
+        }
+    }
+
+    @Test
+    fun linkBeingReestablished_isWaitedFor_howeverLongItTakes() {
+        // The Wi-Fi dropped and Link is asking for it again. That has its own limit (twenty attempts); as
+        // long as it is still trying, the download waits - also past the ten minutes a silent camera gets.
+        var attempts = 0
+        val source = Runner.Source { _, sink, _, progress ->
+            attempts++
+            clock.time += 1000
+            if (clock.time - 5_000_000L < 25 * 60_000L) {
+                link = if (attempts % 2 == 0) LinkState.LOST else LinkState.SEARCHING
+                throw IOException("not connected to the camera")
+            }
+            link = LinkState.CONNECTED                  // back after twenty-five minutes
+            sink.append(ByteArray(1000), 1000)
+            progress(1000, 1000)
+        }
+        link = LinkState.LOST
+        val job = Job(Cam.Clip(path, 1000, "", "", ""))
+        assertEquals(Runner.Result.SAVED, runner(source).run(job))
+        assertTrue(Jobs.WAITING in states)
+        assertTrue("$attempts attempts", attempts > 300)
+
+        // And when the link then gives up, the queue stops at the next attempt.
+        link = LinkState.SEARCHING
+        var tries = 0
+        val dead = Runner.Source { _, _, _, _ ->
+            if (++tries == 5) link = LinkState.NOT_FOUND
+            throw IOException("not connected to the camera")
+        }
+        val other = Job(Cam.Clip("/SD/Normal/F/OTHER.MP4", 1000, "", "", ""))
+        assertEquals(Runner.Result.PAUSED, runner(dead).run(other))
+        assertEquals(5, tries)
+    }
+
+    @Test
+    fun silentCamera_clockStartsWhenTheLinkIsBack() {
+        // Reconnecting took eight minutes, then the camera is connected but sends nothing: it still gets
+        // its full ten minutes from that moment, not two.
+        val source = Runner.Source { _, _, _, _ ->
+            clock.time += 15_000
+            link = if (clock.time - 5_000_000L < 8 * 60_000L) LinkState.SEARCHING else LinkState.CONNECTED
+            throw IOException("timeout")
+        }
+        link = LinkState.SEARCHING
+        val job = Job(Cam.Clip(path, 1000, "", "", ""))
+        assertEquals(Runner.Result.PAUSED, runner(source).run(job))
+        // Eight minutes of reconnecting plus ten of silence, give or take one 18-second round.
+        val waited = clock.time - 5_000_000L
+        assertTrue("$waited", waited in 18 * 60_000L - 20_000..18 * 60_000L + 20_000)
     }
 
     @Test
@@ -422,7 +476,7 @@ class RunnerTest {
             override fun sleep(ms: Long) {
                 job.cancel = true                               // Stop arrives during the 3 s wait
             }
-        }, { false }, { false }) { }
+        }, { LinkState.CONNECTED }, { false }) { }
         assertEquals(Runner.Result.CANCELLED, r.run(job))
         assertTrue(store.unfinished.isEmpty())
         assertEquals(1, fileRequests())
@@ -441,7 +495,7 @@ class RunnerTest {
             }
         }
         val job = Job(Cam.Clip(path, 10_000_000, "", "", ""))
-        val r = Runner(source, store, clock, { false }, { false }) { j ->
+        val r = Runner(source, store, clock, { LinkState.CONNECTED }, { false }) { j ->
             if (j.state == Jobs.DOWNLOADING && j.bytesPerSec > 0) reported.add(j.bytesPerSec)
         }
         assertEquals(Runner.Result.SAVED, r.run(job))

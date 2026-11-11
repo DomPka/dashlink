@@ -3,19 +3,27 @@
 A small Android app that downloads clips from a Mio MiVue dashcam over Wi-Fi **without taking over the
 phone's main Wi-Fi** — so wireless Android Auto can stay connected while it works.
 
-Status: v0.1, written from the protocol used by MiVue Pro 1.1.233.1. Not yet tested against a camera.
+Status: v0.2, written from the protocol used by MiVue Pro 1.1.233.1. **Not yet tested against a camera or in a
+car.** Everything that can be tested without one is tested on every build (see [Tests](#tests)); what cannot
+is listed under [Not covered by any test](#not-covered-by-any-test).
 
 ## What it does
 
 - Joins the camera's Wi-Fi as a second, local-only link (Android 12+ dual Wi-Fi).
 - Lists the camera's folders (Normal / Event / Parking / Photo), front or rear camera, newest first.
 - Downloads ticked clips in a foreground service. If the link drops, it waits and resumes from the same byte.
-- Saves finished clips to `Movies/DashLink` (photos to `Pictures/DashLink`).
-- Read-only: it never changes camera settings, deletes files or formats the card.
+- Saves clips straight into `Movies/DashLink` (photos into `Pictures/DashLink`). An unfinished clip is hidden
+  from the Gallery until it is complete; there is never a second copy.
+- Remembers the queue: clips that were queued when Android stopped the app are still queued, and continue from
+  where they were, the next time the camera is connected.
+- Read-only: it never changes camera settings, deletes files or formats the card. The only requests it can
+  send are `action=get`, `action=dir`, `action=reardir` and plain file downloads; anything else is refused
+  inside the app before it reaches the network.
 
 ## Build
 
-- GitHub: push to `main`; the workflow builds the APK and publishes it as the `latest` release.
+- GitHub: push to `main`. The workflow runs the unit tests, builds the APK, tests that APK on an emulator and
+  only then publishes it as the `latest` release (`DashLink.apk`). A failing test blocks the release.
 - Android Studio: open this folder and run the `app` configuration.
 
 `debug.keystore` is a throwaway debug key kept in the repo on purpose, so each build installs over the last.
@@ -27,9 +35,59 @@ Status: v0.1, written from the protocol used by MiVue Pro 1.1.233.1. Not yet tes
 3. The status line should show the camera **and** still list the car under "Other Wi-Fi on this phone".
 4. Tick a clip, tap Download selected. Tap Diagnostics to share a report if anything looks wrong.
 
+Things the app will ask for, and why:
+
+- **Location (precise)** — Android only tells an app the name of a Wi-Fi network with this permission. Without
+  it the camera has to be picked from Android's prompt every time and the link cannot reconnect by itself.
+- **Nearby devices**, **Notifications** — the link to the camera, and the progress notification.
+- **Unrestricted battery use** — asked on the first download. Without it Android (Samsung in particular) may
+  stop long downloads while the screen is off. If that happens, the app says so the next time it is opened.
+
+Stop cancels everything that is queued and deletes what was half-downloaded.
+
+## Tests
+
+`./gradlew testDebugUnitTest` — on any computer, no phone needed. A small HTTP server (`FakeCam`) plays the camera:
+
+- file list and settings parsing, including damaged and enormous replies;
+- downloads: full, resumed, Range ignored, 416, cut mid-stream and resumed to a byte-identical file,
+  unknown size, cancel, time-outs, non-200, empty body;
+- 5000+ files, paging that repeats or never ends, no rear camera;
+- one request to the camera at a time, and nothing but reads ever sent;
+- the rules of the Wi-Fi link: refusals, time-out, drop and reconnect, no retry loop, no leaked request,
+  the camera's address when the DHCP server or gateway is missing;
+- the download queue: link drop, 404, phone full, Stop, saved and restored queue.
+
+`./gradlew connectedDebugAndroidTest` — on an emulator or phone (CI uses an API 34 emulator). The real app,
+service and MediaStore, with `FakeCam` as the camera and a pretend Wi-Fi link: permission dialogs granted and
+denied, Android's Wi-Fi prompt declined and timed out, Wi-Fi off, downloads through the screen into shared
+storage, the app being rebuilt, rotated and resized, the battery-optimisation question, the Diagnostics report.
+
+`ci/smoke.sh app.apk` — installs the release APK on the emulator and pokes it over plain adb, with all
+permissions granted and with all denied. Any crash or ANR in logcat fails the build.
+
+## Not covered by any test
+
+No camera and no car were available. These need the real thing:
+
+- whether the camera's replies really look the way `Cam.kt` expects (list XML, settings, `Range` support);
+- joining the camera's Wi-Fi at all: password, Android's prompt, the prompt being skipped the second time;
+- two Wi-Fi links at once on the phone, and wireless Android Auto staying up meanwhile;
+- reconnecting after a real drop with the screen off;
+- Samsung's battery management on a long download;
+- transfer speed, and how the camera copes with being asked for many large files in a row.
+
+The Diagnostics report is built for exactly this: it says what the phone supports, what the link and the queue
+did, why Android last stopped the app, and what the camera answered — without the Wi-Fi password.
+
 ## Code map
 
-- `Link.kt` — the second Wi-Fi link (request, reconnect, camera address).
-- `Cam.kt` — the camera's HTTP interface: info, file list, resumable file download.
-- `DownloadService.kt` — download queue, retry/resume, saving to shared storage.
-- `MainActivity.kt` — the single screen.
+- `Cam.kt` — the camera's HTTP interface: info, file list, resumable file download. No Android classes.
+- `LinkCore.kt` — the rules of the second Wi-Fi link (ask, retry, give up, camera address). No Android classes.
+- `Link.kt` — the Android side of the link: `WifiNetworkSpecifier` requests and callbacks.
+- `Jobs.kt`, `Runner.kt` — the download queue and what happens to one clip (wait, resume, give up).
+- `MediaFiles.kt` — files in shared storage (pending MediaStore items).
+- `DownloadService.kt` — the foreground service around the queue.
+- `Browser.kt`, `MainActivity.kt` — the file list and the single screen.
+- `Power.kt`, `Report.kt`, `Diag.kt`, `App.kt` — battery optimisation, the Diagnostics report, last-crash note.
+- `app/src/sharedTest` — `FakeCam`, used by both kinds of test.
