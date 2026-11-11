@@ -61,6 +61,14 @@ def wait(selector, seconds, accept=lambda node: True):
     end = time.time() + seconds
     while True:
         root = screen()
+        # A just-booted emulator sometimes puts "<some system app> isn't responding" over everything. That is
+        # the emulator being slow: tap "Wait" and look again. (An ANR of DashLink itself still fails the
+        # build: ci/crashes.sh finds it in logcat whatever was tapped here.)
+        slow = find(root, "id=aerr_wait")
+        if slow is not None and not selector.startswith("id=aerr_"):
+            tap(slow)
+            time.sleep(2)
+            continue
         node = find(root, selector)
         if node is not None and accept(node):
             return node, root
