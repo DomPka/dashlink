@@ -376,6 +376,30 @@ class RunnerTest {
     }
 
     @Test
+    fun errorsBetweenStretchesOfProgress_areNotAddedUp() {
+        // Eight errors, some progress, eight errors again: sixteen in all, but never more than eight in a row.
+        var attempt = 0
+        val source = Runner.Source { _, sink, _, progress ->
+            attempt++
+            when (attempt) {
+                in 1..8, in 10..17 -> throw Cam.HttpException(503)
+                9 -> {
+                    sink.append(ByteArray(500), 500)
+                    progress(500, 1000)
+                    throw IOException("dropped")
+                }
+                else -> {
+                    sink.append(ByteArray(500), 500)
+                    progress(1000, 1000)
+                }
+            }
+        }
+        val job = Job(Cam.Clip(path, 1000, "", "", ""))
+        assertEquals(Runner.Result.SAVED, runner(source).run(job))
+        assertEquals(18, attempt)
+    }
+
+    @Test
     fun cameraThatRejectsEveryResume_cannotMakeItDownloadForEver() {
         cam.addFile("Normal", name, 1000)
         cam.override = { if ('?' in it.target) null else FakeCam.Reply(416) }

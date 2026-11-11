@@ -12,6 +12,10 @@ is listed under [Not covered by any test](#not-covered-by-any-test).
 - Joins the camera's Wi-Fi as a second, local-only link (Android 12+ dual Wi-Fi).
 - Lists the camera's folders (Normal / Event / Parking / Photo), front or rear camera, newest first.
 - Downloads ticked clips in a foreground service. If the link drops, it waits and resumes from the same byte.
+- Knows when to stop trying. A clip the camera no longer has (or keeps answering with nothing) is marked
+  failed and the next one starts. A camera that is out of reach pauses the queue instead: after ten minutes
+  connected without a new byte, or as soon as the link has given up. A full phone pauses it too. A paused
+  queue keeps what it has and continues when the camera is back or Download is tapped.
 - Saves clips straight into `Movies/DashLink` (photos into `Pictures/DashLink`). An unfinished clip is hidden
   from the Gallery until it is complete; there is never a second copy.
 - Remembers the queue: clips that were queued when Android stopped the app are still queued, and continue from
@@ -32,6 +36,8 @@ is listed under [Not covered by any test](#not-covered-by-any-test).
 
 1. Switch Wi-Fi on in the camera's menu and note the network name and password it shows.
 2. With Android Auto running, open DashLink, enter the name (the start of it is enough) and password, tap Connect.
+   The first time, Android shows its own prompt with the networks it found: pick the camera there. Android gives
+   that prompt as long as it needs; DashLink only ends a search nobody answers after three minutes.
 3. The status line should show the camera **and** still list the car under "Other Wi-Fi on this phone".
 4. Tick a clip, tap Download selected. Tap Diagnostics to share a report if anything looks wrong.
 
@@ -58,13 +64,18 @@ Stop cancels everything that is queued and deletes what was half-downloaded.
   the camera's address when the DHCP server or gateway is missing;
 - the download queue: link drop, 404, phone full, Stop, saved and restored queue.
 
-`./gradlew connectedDebugAndroidTest` — on an emulator or phone (CI uses an API 34 emulator). The real app,
-service and MediaStore, with `FakeCam` as the camera and a pretend Wi-Fi link: permission dialogs granted and
-denied, Android's Wi-Fi prompt declined and timed out, Wi-Fi off, downloads through the screen into shared
-storage, the app being rebuilt, rotated and resized, the battery-optimisation question, the Diagnostics report.
+`./gradlew connectedDebugAndroidTest` — on an emulator or phone. CI runs them on two emulators: API 34
+(Android 14) and API 36 (Android 16). The real app, service and MediaStore, with `FakeCam` as the camera and a
+pretend Wi-Fi link: permission dialogs granted and denied, Android's Wi-Fi prompt declined, left alone and
+timed out, Wi-Fi off, downloads through the screen into shared storage, a queue left behind by a killed
+process, the app being rebuilt, rotated and resized, the battery-optimisation question, the Diagnostics report.
 
 `ci/smoke.sh app.apk` — installs the release APK on the emulator and pokes it over plain adb, with all
-permissions granted and with all denied. Any crash or ANR in logcat fails the build.
+permissions granted and with all denied. Any crash or ANR of the app in logcat fails the build.
+
+An emulator is not a Galaxy Z Fold: it has stock Android's battery rules, one screen and a simulated Wi-Fi
+chip. The tests show that the app handles what Android can answer; they cannot show what a Samsung phone,
+the camera or the car will answer.
 
 ## Not covered by any test
 
