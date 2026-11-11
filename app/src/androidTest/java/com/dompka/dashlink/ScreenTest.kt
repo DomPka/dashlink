@@ -313,7 +313,7 @@ class ScreenTest {
         Kit.launch().use {
             Kit.tap("diag")
             // Android's share sheet comes up, showing the start of the report as what is about to be shared.
-            val preview = ".*DashLink 0\\.2 \\(.*diagnostics.*"
+            val preview = ".*DashLink \\d+\\.\\d+ \\(.*diagnostics.*"
             Kit.until("the share sheet", 30_000) { Kit.find(preview) != null || Kit.find(".*Share diagnostics.*") != null }
             Kit.device.pressBack()
             Kit.until("the share sheet to close") { Kit.find(preview) == null && Kit.find(".*Share diagnostics.*") == null }
