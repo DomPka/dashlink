@@ -38,6 +38,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: |
+            sleep 60
             ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.dompka.dashlink.ScreenshotTest || true
             adb pull /sdcard/Download/dashlink-shots screenshots || true
             python3 ci/report.py app/build/outputs/androidTest-results || true

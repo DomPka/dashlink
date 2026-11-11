@@ -125,7 +125,13 @@ internal object Kit {
     /** Starts the app. On a first start Android's permission question covers the screen at once; that counts as started. */
     fun launch(): ActivityScenario<MainActivity> {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("the main screen or a permission question", 30_000) {
+        waitFor("the main screen or a permission question", 60_000) {
+            // A freshly started (or just re-themed) emulator sometimes puts "System UI isn't responding" in
+            // front of everything. That is the emulator being slow, not the app: tap "Wait" and carry on.
+            device.findObject(By.res("android", "aerr_wait"))?.let {
+                it.click()
+                return@waitFor null
+            }
             device.findObject(By.res(PKG, "status")) ?: device.findObject(permissionButtons)
         }
         return scenario
