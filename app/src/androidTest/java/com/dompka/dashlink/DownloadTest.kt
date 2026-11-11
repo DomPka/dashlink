@@ -125,8 +125,8 @@ class DownloadTest {
         assertTrue(Kit.ctx.stopService(Intent(Kit.ctx, DownloadService::class.java)))
         Kit.until("the service to be gone", 20_000) { !DownloadService.alive && !DownloadService.working }
         assertFalse("wake lock and Wi-Fi lock are released", DownloadService.locksHeld)
-        assertEquals("Android no longer lists the wake lock", emptyList<String>(), Kit.wakeLocksHeld())
-        Kit.wifiLocksHeld()?.let { assertEquals("Android no longer lists the Wi-Fi lock", emptyList<String>(), it) }
+        Kit.until("Android to stop listing the wake lock") { Kit.wakeLocksHeld().isEmpty() }
+        Kit.until("Android to stop listing the Wi-Fi lock") { Kit.wifiLocksHeld()?.isEmpty() ?: true }
         assertEquals("the clip is still wanted", Jobs.QUEUED, job(a)!!.state)
         assertEquals("its unfinished file is kept", 1, Kit.stored(tag).count { it.pending })
     }

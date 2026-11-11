@@ -282,9 +282,13 @@ internal object Kit {
     /** Android's own list of Wi-Fi locks currently held by this app, or null if this Android does not print one. */
     fun wifiLocksHeld(): List<String>? {
         val lines = shell("dumpsys wifi").lines()
-        val start = lines.indexOfFirst { it.trim().startsWith("Locks held:") }
-        if (start < 0) return null
-        return lines.drop(start + 1).takeWhile { it.contains("WifiLock{") }.filter { it.contains("dashlink:downloads") }
+        // The heading is printed twice - by the Wi-Fi service, and again by its lock manager after two
+        // lines of totals - and the locks follow the second one. Whichever is followed by locks counts.
+        val headings = lines.indices.filter { lines[it].trim() == "Locks held:" }
+        if (headings.isEmpty()) return null
+        return headings
+            .flatMap { h -> lines.drop(h + 1).takeWhile { it.contains("WifiLock{") } }
+            .filter { it.contains("dashlink:downloads") }
     }
 
     /** A clip name no earlier test (or earlier run on the same emulator) can have used. */
