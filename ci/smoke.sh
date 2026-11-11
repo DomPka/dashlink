@@ -53,9 +53,9 @@ connect_twice() {
     ui type id=pass 12345678 || die "could not type the password"
     ui tap id=connect || die "no Connect button"
     # A phone that cannot hold two Wi-Fi links (the emulator) is warned first.
-    ui tap-if "text=connect anyway" 6
+    ui tap-away "text=connect anyway" 6
     # Android's own "choose a device" prompt. Decline it; if its button cannot be found, Back does the same.
-    if [ "$(ui tap-if 'text=cancel' 45)" != "tapped" ]; then
+    if [ "$(ui tap-away 'text=cancel' 45)" != "tapped" ]; then
         adb shell dumpsys activity activities | grep -m1 topResumedActivity | grep -q settings \
             || die "Android's Wi-Fi prompt did not appear"
         adb shell input keyevent KEYCODE_BACK
@@ -106,15 +106,8 @@ step "2. Fresh install with every runtime permission denied"
 adb uninstall "$PKG" > /dev/null || die "could not uninstall"
 adb install "$APK" || die "the APK does not install"
 launch
-denied=0
-for i in 1 2 3 4 5 6; do
-    if [ "$(ui tap-if id=permission_deny_button $([ $denied -eq 0 ] && echo 60 || echo 8))" = "tapped" ]; then
-        denied=$((denied + 1))
-        sleep 1
-    else
-        break
-    fi
-done
+# Counted by question, not by tap: Android drops a tap on a dialog that is still on its way in.
+denied=$(ui answer id=permission_deny_button 60) || die "could not answer the permission questions"
 echo "permission questions answered with no: $denied"
 [ "$denied" -eq 3 ] || die "expected 3 permission questions (location, nearby devices, notifications), got $denied"
 ui expect id=status "Not connected to the camera" 30 || die "the main screen did not come back after the permission questions"

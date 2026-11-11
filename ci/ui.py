@@ -6,6 +6,11 @@ A view is named by a selector: "id=connect" (the end of its resource id) or "tex
 
     ui.py tap SELECTOR [seconds]            wait for the view, tap it; fails if it never shows
     ui.py tap-if SELECTOR [seconds]         tap it if it shows up in time; prints "tapped" or "absent"
+    ui.py tap-away SELECTOR [seconds]       like tap-if, for a button that closes its own window: taps
+                                            again if it is still there (Android drops a tap on a window
+                                            that is still on its way in); prints "tapped" or "absent"
+    ui.py answer SELECTOR [seconds]         tap SELECTOR on each of Android's permission questions in
+                                            turn; prints how many different questions there were
     ui.py expect SELECTOR REGEX [seconds]   wait until the view's text contains REGEX
     ui.py absent SELECTOR                   fails if the view is on the screen right now
     ui.py type SELECTOR TEXT                replace the content of a text field ("" just empties it)
@@ -69,6 +74,59 @@ def tap(node):
     adb("shell", "input", "tap", str((x1 + x2) // 2), str((y1 + y2) // 2))
 
 
+def tap_away(selector, seconds):
+    """Taps the view until it is gone. True if there was anything to tap."""
+    node, root = wait(selector, seconds)
+    if node is None:
+        return False
+    for _ in range(6):
+        tap(node)
+        tapped = time.time()
+        misses = 0
+        while True:
+            time.sleep(0.7)
+            root = screen()
+            if root is None:
+                pass                        # the screen is changing: neither "there" nor "gone"
+            elif find(root, selector) is None:
+                misses += 1
+                if misses >= 2:
+                    return True
+            else:
+                misses = 0
+                node = find(root, selector)
+                if time.time() - tapped > 4:
+                    break                   # read, still there, long enough: that tap was dropped
+            if time.time() - tapped > 40:
+                fail("cannot tell whether %s is still on the screen" % selector, root)
+    fail("%s is still on the screen after six taps" % selector, screen())
+
+
+def answer(selector, seconds):
+    """Taps SELECTOR on one permission question after the other; returns the questions."""
+    questions = []
+    last, tapped = None, 0.0
+    patience = seconds
+    give_up = time.time() + 180
+    while time.time() < give_up and len(questions) < 8:
+        node, root = wait(selector, patience)
+        if node is None:
+            break
+        patience = 8
+        message = find(root, "id=permission_message")
+        # What is being asked; from a dialog built differently, everything it says.
+        question = (message.get("text") if message is not None else "") or " | ".join(texts(root))
+        if question == last and time.time() - tapped < 4:
+            time.sleep(0.5)             # answered already: Android is still putting the question away
+            continue
+        tap(node)
+        if question != last:
+            questions.append(question)
+        last, tapped = question, time.time()
+        time.sleep(1)
+    return questions
+
+
 def fail(message, root):
     print("ui.py: " + message, file=sys.stderr)
     print("on the screen:\n  " + "\n  ".join(texts(root)), file=sys.stderr)
@@ -90,6 +148,13 @@ def main():
         else:
             tap(node)
             print("tapped")
+    elif cmd == "tap-away":
+        print("tapped" if tap_away(args[1], float(args[2]) if len(args) > 2 else 15) else "absent")
+    elif cmd == "answer":
+        questions = answer(args[1], float(args[2]) if len(args) > 2 else 15)
+        for q in questions:
+            print("asked: " + q, file=sys.stderr)
+        print(len(questions))
     elif cmd == "expect":
         seconds = float(args[3]) if len(args) > 3 else 15
         node, root = wait(args[1], seconds, lambda n: re.search(args[2], n.get("text", ""), re.I | re.S))

@@ -233,11 +233,9 @@ class ScreenTest {
             Kit.see(".*Keep downloading with the screen off.*")
             Kit.dialogButton(positive = true)
             // ...and "Allow" leads to Android's own question, which only the user can answer.
-            val systemAllow = Kit.waitFor("Android's battery-optimisation question", 20_000) {
-                Kit.device.findObject(By.pkg("com.android.settings").res("android:id/button1"))
-            }
+            Kit.waitFor("Android's battery-optimisation question", 20_000) { Kit.device.findObject(Kit.settingsOk) }
             assertNotNull(Kit.find(".*background.*", "com.android.settings"))
-            systemAllow.click()
+            Kit.tapAway("Allow on Android's battery-optimisation question") { Kit.device.findObject(Kit.settingsOk) }
             Kit.until("the exemption to be granted") { Power.exempt(Kit.ctx) }
 
             Kit.until("both clips to be saved", 60_000) { Jobs.all.count { it.state == Jobs.SAVED } == 2 }
@@ -266,10 +264,8 @@ class ScreenTest {
             Kit.until("the offer on the rebuilt screen") { Kit.text("notice").contains("Battery optimisation is on") }
             assertNull("the dialog does not come back", Kit.find(".*Keep downloading with the screen off.*"))
             // The button opens the same system question.
-            Kit.tap("notice_action")
-            Kit.waitFor("Android's battery-optimisation question", 20_000) {
-                Kit.device.findObject(By.pkg("com.android.settings").res("android:id/button1"))
-            }.click()
+            Kit.tapUntil("notice_action", "Android's battery-optimisation question") { Kit.device.findObject(Kit.settingsOk) != null }
+            Kit.tapAway("Allow on Android's battery-optimisation question") { Kit.device.findObject(Kit.settingsOk) }
             Kit.until("the exemption to be granted") { Power.exempt(Kit.ctx) }
             Kit.until("the offer to go away") { Kit.device.findObject(By.res(Kit.PKG, "notice")) == null }
         }

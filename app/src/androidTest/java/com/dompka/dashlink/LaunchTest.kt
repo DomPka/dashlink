@@ -52,7 +52,7 @@ class LaunchTest {
         Kit.launch().use { scenario ->
             // First start: Android asks for location, nearby devices and notifications. Say no to each.
             val asked = Kit.answerPermissionDialogs(allow = false)
-            assertEquals("one question per permission group", 3, asked)
+            assertEquals("one question per permission group, got $asked", 3, asked.size)
             assertFalse(granted(Manifest.permission.ACCESS_FINE_LOCATION))
             assertFalse(granted(Manifest.permission.NEARBY_WIFI_DEVICES))
             assertFalse(granted(Manifest.permission.POST_NOTIFICATIONS))
@@ -70,8 +70,8 @@ class LaunchTest {
             assertFalse("the permission question came back by itself", Kit.permissionDialogShowing())
 
             // "Allow" asks again, and granting this time clears the notice.
-            Kit.tap("notice_action")
-            assertTrue(Kit.answerPermissionDialogs(allow = true) >= 1)
+            Kit.tapUntil("notice_action", "Android's permission question") { Kit.permissionDialogShowing() }
+            assertTrue(Kit.answerPermissionDialogs(allow = true).isNotEmpty())
             Kit.until("all permissions to be granted") { Report.missingPermissions(Kit.ctx).isEmpty() }
             Kit.until("the notice to go away") { Kit.device.findObject(By.res(Kit.PKG, "notice")) == null }
         }
@@ -84,7 +84,8 @@ class LaunchTest {
             if (p != missing) Kit.instr.uiAutomation.grantRuntimePermission(Kit.PKG, p)
         }
         Kit.launch().use {
-            assertEquals("asked only for the one that is missing", 1, Kit.answerPermissionDialogs(allow = false))
+            val asked = Kit.answerPermissionDialogs(allow = false)
+            assertEquals("asked only for the one that is missing, got $asked", 1, asked.size)
             assertFalse(granted(missing))
             assertEquals(listOf(label), Report.missingPermissions(Kit.ctx).map { it.second })
             val notice = Kit.text("notice")
@@ -150,7 +151,7 @@ class LaunchTest {
             Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
             Kit.until("the search to start") { Link.state == LinkState.SEARCHING }
             // Android's own "choose a device" prompt comes up. The user declines.
-            Kit.tapText("cancel", "com.android.settings", 30_000)
+            Kit.tapAwayText("cancel", "com.android.settings", 30_000)
             Kit.until("Android to report the refusal") { Link.state == LinkState.NOT_FOUND }
             assertEquals(1, Link.core.requests)
             assertNotNull(Link.lastError)
@@ -196,7 +197,7 @@ class LaunchTest {
             Kit.see("cancel", "com.android.settings", 30_000)
             Kit.holds("the prompt stays, the search goes on", 12_000) { Link.state == LinkState.SEARCHING && Link.core.requests == 1 }
             assertNotNull("the prompt is still Android's own, not a \"cancelled\" box", Kit.find("cancel", "com.android.settings"))
-            Kit.tapText("cancel", "com.android.settings")
+            Kit.tapAwayText("cancel", "com.android.settings")
             Kit.until("the refusal") { Link.state == LinkState.NOT_FOUND }
         }
     }
@@ -204,13 +205,13 @@ class LaunchTest {
     @Test
     fun connect_withAllPermissionsDenied() {
         Kit.launch().use {
-            assertEquals(3, Kit.answerPermissionDialogs(allow = false))
+            assertEquals(3, Kit.answerPermissionDialogs(allow = false).size)
             Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
             // Whatever Android makes of a request without the permissions - a prompt, a refusal, an
             // exception - the app must end up in a state the user can act on, not crashed and not looping.
             Kit.until("an answer from Android") { Link.state == LinkState.SEARCHING || Link.state == LinkState.NOT_FOUND }
             if (Link.state == LinkState.SEARCHING) {
-                Kit.tapText("cancel", "com.android.settings", 30_000)
+                Kit.tapAwayText("cancel", "com.android.settings", 30_000)
                 Kit.until("the refusal") { Link.state == LinkState.NOT_FOUND }
             }
             assertEquals(1, Link.core.requests)
