@@ -87,6 +87,10 @@ No camera and no car were available. These need the real thing:
 - two Wi-Fi links at once on the phone, and wireless Android Auto staying up meanwhile;
 - reconnecting after a real drop with the screen off;
 - Samsung's battery management on a long download;
+- Wi-Fi power saving with the screen off: Android 14 and later treat the Wi-Fi lock the app takes as a
+  "low latency" lock, which only counts while the app is on screen, so a download in the background may be slower;
+- Android refusing to start the download service: the refusal is caught and shown on the screen, but nothing
+  on an emulator provokes it reliably;
 - transfer speed, and how the camera copes with being asked for many large files in a row.
 
 The Diagnostics report is built for exactly this: it says what the phone supports, what the link and the queue
