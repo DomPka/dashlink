@@ -31,6 +31,7 @@ class CamRequestTest {
         cam.close()
         Cam.opener = Cam.Opener { throw IOException("no camera in this test") }
         Cam.downloadTimeoutMs = 15_000
+        assertTrue("something other than a read was sent: ${cam.violations.map { it.target }}", cam.violations.isEmpty())
     }
 
     private fun entries(n: Int, folder: String = "Normal") = (0 until n).map {
@@ -158,7 +159,26 @@ class CamRequestTest {
         assertNull(all.error)
         assertFalse(all.truncated)
         assertEquals(16, all.clips.size)
-        assertEquals(2, cam.requests.size)
+        assertEquals("the first page, then two with nothing new", 3, cam.requests.size)
+    }
+
+    @Test
+    fun listAll_entriesThatAreNotClips_doNotEndTheListingEarly() {
+        // A page full of entries that are not clips (sub-folders here) sits between two pages of clips.
+        val files = entries(40)
+        cam.override = { req ->
+            val from = req.query["from"]!!.toInt()
+            val all = ArrayList<String>()
+            for (e in files.take(16)) all.add("<file><name>${e.path}</name><size>${e.size}</size><time>${e.time}</time></file>")
+            repeat(16) { all.add("<file><name>/SD/Normal/sub$it/</name></file>") }
+            for (e in files.drop(16)) all.add("<file><name>${e.path}</name><size>${e.size}</size><time>${e.time}</time></file>")
+            FakeCam.Reply(200, ("<DCIM>" + all.drop(from).take(16).joinToString("") + "</DCIM>").toByteArray())
+        }
+        val all = listAll()
+        assertNull(all.error)
+        assertEquals("the clips after the sub-folders are there too", 40, all.clips.size)
+        // The next page always starts after everything the camera sent, clip or not.
+        assertEquals(listOf("0", "16", "32", "48", "56"), cam.requests.map { it.query["from"] })
     }
 
     @Test
@@ -177,15 +197,17 @@ class CamRequestTest {
 
     @Test(timeout = 60_000)
     fun listAll_oneNewFilePerPageForEver_isCapped() {
-        // The nastiest kind of "never ends": each page repeats old entries and adds a single new one.
+        // The nastiest kind of "never ends": every page repeats fifteen old entries and adds a single new one.
         cam.override = { req ->
-            val from = req.query["from"]!!.toInt()
-            FakeCam.Reply(200, cam.xml((maxOf(0, from - 15)..from).map { FakeCam.Entry("/SD/Normal/F/S$it.MP4", 1, "t") }).toByteArray())
+            val page = req.query["from"]!!.toInt() / 16
+            val entries = (0 until 15).map { FakeCam.Entry("/SD/Normal/F/OLD$it.MP4", 1, "t") } + FakeCam.Entry("/SD/Normal/F/NEW$page.MP4", 1, "t")
+            FakeCam.Reply(200, cam.xml(entries).toByteArray())
         }
         val all = listAll()
+        assertNull(all.error)
         assertTrue(all.truncated)
-        assertTrue("stopped by the page limit, long before the file limit", all.clips.size < Cam.MAX_FILES)
-        assertTrue(cam.requests.size <= Cam.MAX_FILES / 16 * 2 + 16)
+        assertTrue("stopped by the page limit, long before the file limit: ${all.clips.size}", all.clips.size < Cam.MAX_FILES / 4)
+        assertEquals(Cam.MAX_FILES / 16 * 2 + 16, cam.requests.size)
     }
 
     @Test
@@ -245,12 +267,20 @@ class CamRequestTest {
     @Test
     fun listAll_folderNamesFromTheCameraCannotAddCommands() {
         cam.folders["Normal"] = entries(1)
-        // The camera's own settings name its folders; a strange value there must stay a value.
-        val all = Cam.listAll("Normal&action=del&property=/SD", false, { true }) { }
-        assertNotNull("no such folder", all.error)
-        val req = cam.requests.single()
-        assertEquals("dir", req.query["action"])
-        assertEquals(1, req.target.split('&').count { it.substringAfter('?').startsWith("action=") })
+        // The camera's own settings name its folders. A value that is more than a name is not sent at all,
+        // not even escaped: a camera that un-escapes before it looks for "action=" would still read it.
+        for (bad in listOf("Normal&action=del&property=/SD", "Normal%26action%3Ddel", "Normal?x", "Nor mal", "Normal#", "", "Ünïcode")) {
+            val all = Cam.listAll(bad, false, { true }) { }
+            assertTrue("$bad -> ${all.error}", all.error!!.startsWith("RefusedException: refused"))
+            assertTrue(all.clips.isEmpty())
+            try {
+                Cam.listUrl(bad, true, 0, 16)
+                fail("must be refused: $bad")
+            } catch (e: Cam.RefusedException) {
+                // expected
+            }
+        }
+        assertTrue("nothing reached the camera", cam.requests.isEmpty())
         // What the original code did with folder names is unchanged for ordinary ones.
         assertEquals(
             "/cgi-bin/Config.cgi?action=dir&property=Normal&count=16&from=32&format=all&backward=",
@@ -316,25 +346,73 @@ class CamRequestTest {
     @Test(timeout = 30_000)
     fun aWholeListingIsOneTurn() {
         cam.folders["Normal"] = entries(64)
-        cam.tweak = { _, reply -> reply.stallMs = 40 }
-        val inside = CountDownLatch(1)
-        val t = Thread { Cam.listAll("Normal", false, { true }) { inside.countDown() } }
-        t.start()
-        assertTrue(inside.await(10, TimeUnit.SECONDS))
-        // Between two pages of the listing nobody else gets in.
-        var busy = 0
-        while (t.isAlive) {
-            try {
-                Cam.get(Cam.STATUS, 1000, waitMs = 0)
-            } catch (e: Cam.BusyException) {
-                busy++
+        val betweenPages = CountDownLatch(1)
+        val goOn = CountDownLatch(1)
+        val t = Thread {
+            Cam.listAll("Normal", false, { true }) {
+                // Called after each page: stop here, between two pages, until the test has had its look.
+                betweenPages.countDown()
+                goOn.await(10, TimeUnit.SECONDS)
             }
-            Thread.sleep(5)
         }
-        t.join()
-        assertTrue(busy > 0)
+        t.start()
+        assertTrue(betweenPages.await(10, TimeUnit.SECONDS))
+        // No request is in flight right now, and still nobody else gets a turn: the listing holds the camera.
+        try {
+            Cam.get(Cam.STATUS, 1000, waitMs = 0)
+            fail("a keep-alive slipped in between two pages of a listing")
+        } catch (e: Cam.BusyException) {
+            // expected
+        }
+        try {
+            Cam.session(100) { Cam.get(Cam.STATUS) }
+            fail("another turn started between two pages of a listing")
+        } catch (e: Cam.BusyException) {
+            // expected
+        }
+        goOn.countDown()
+        t.join(10_000)
+        assertFalse(t.isAlive)
+        assertTrue("only list requests reached the camera", cam.requests.all { it.query["action"] == "dir" })
+        // Afterwards the camera is free again.
+        assertTrue(Cam.get(Cam.STATUS, 1000, waitMs = 0).isNotEmpty())
         assertEquals(1, cam.maxActive)
-        assertFalse("no keep-alive slipped in between pages", cam.requests.dropLast(1).any { it.query["property"] == "status" })
+    }
+
+    @Test(timeout = 30_000)
+    fun whoeverWaitedLongestGoesFirst() {
+        // Three requests queue up behind one that holds the camera; they are served in the order they came.
+        cam.tweak = { _, reply -> reply.stallMs = 30 }
+        val inside = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val holder = Thread {
+            Cam.session {
+                inside.countDown()
+                release.await()
+            }
+        }
+        holder.start()
+        inside.await()
+        val waiters = ArrayList<Thread>()
+        for (i in 0 until 3) {
+            val w = Thread {
+                try {
+                    Cam.get(Cam.listUrl("F$i", false, 0, 16))
+                } catch (e: IOException) {
+                    // no such folder; only the order of arrival matters here
+                }
+            }
+            w.start()
+            waiters.add(w)
+            // Give each one time to get in line before the next arrives.
+            val deadline = System.currentTimeMillis() + 5000
+            while (w.state != Thread.State.WAITING && w.state != Thread.State.TIMED_WAITING && System.currentTimeMillis() < deadline) Thread.sleep(5)
+        }
+        release.countDown()
+        for (w in waiters) w.join(10_000)
+        holder.join()
+        assertEquals(listOf("F0", "F1", "F2"), cam.requests.map { it.query["property"] })
+        assertEquals(1, cam.maxActive)
     }
 
     // ---------------------------------------------------------------- read-only
@@ -350,6 +428,10 @@ class CamRequestTest {
             "/SD/Photo/F/IMG%200001.JPG"
         )
         for (a in allowed) Cam.requireRead(a)
+        // What file names turn into on their way to the camera is allowed too.
+        for (name in listOf("/SD/Normal/F/FILE240101-120000F.MP4", "/SD/Photo/F/a b (1).JPG", "/SD/Event/R/Ünïcödé.MP4", "SD/Normal/x.MP4")) {
+            Cam.requireRead(Cam.filePath(name))
+        }
 
         val refused = listOf(
             "/cgi-bin/Config.cgi?action=set&property=Camera.Menu.VideoRes&value=1080P30",
@@ -372,16 +454,69 @@ class CamRequestTest {
             "/SD/Normal/F/x.MP4#frag",
             "SD/Normal/F/x.MP4",                                            // not absolute
             "http://192.72.1.1/cgi-bin/Config.cgi?action=del",
-            ""
+            "",
+            // Paths that are one thing as written and another once a server (or Android's own HTTP client,
+            // which resolves "." and ".." before sending) has tidied them up.
+            "/./cgi-bin/Config.cgi%3Faction=del&property=x",
+            "/SD/../cgi-bin/Config.cgi%3Faction=del&property=x",
+            "//cgi-bin/Config.cgi%3Faction=del",
+            "/SD//Normal/x.MP4",
+            "/SD/./Normal/x.MP4",
+            "/SD/Normal/../../x.MP4",
+            "/SD/Normal/",                                                  // a folder, not a file
+            "/SD/%2e%2e/x.MP4",
+            "/SD/%2E%2E/cgi-bin/x",
+            "/SD/Normal%2Fx.MP4",
+            "/SD/Normal/x%3Fa=b.MP4",
+            "/SD/Normal/x%23.MP4",
+            "/SD/Normal/x%25.MP4",
+            "/SD/Normal/x%5C.MP4",
+            "/SD/Normal/x%00.MP4",
+            "/SD/Normal/x%zz.MP4",                                          // not an escape at all
+            "/SD/Normal/x%4",
+            "/SD/Normal/a b.MP4",                                           // a raw space: the path was not prepared by filePath()
+            "/SD/Normal/ä.MP4",
+            "/SD\\Normal\\x.MP4",
+            "/SD/config.cgi.MP4",
+            "/SD/cgi-bin.MP4"
         )
         for (r in refused) {
             try {
                 Cam.requireRead(r)
                 fail("must be refused: $r")
-            } catch (e: IOException) {
+            } catch (e: Cam.RefusedException) {
                 assertTrue(e.message!!.startsWith("refused"))
             }
         }
+    }
+
+    @Test
+    fun pathsFromTheList_cannotBecomeCommands_howeverTheyAreSpelled() {
+        // What a camera (or something pretending to be one) might put where a clip's path belongs.
+        val hostile = listOf(
+            "/cgi-bin/Config.cgi?action=del&property=/SD/Normal/F/A.MP4",
+            "/./cgi-bin/Config.cgi?action=del&property=/SD/Normal/F/A.MP4",
+            "/SD/../cgi-bin/Config.cgi?action=format&property=SD0",
+            "//cgi-bin/Config.cgi?action=set&property=Net.WIFI_AP.SSID&value=x",
+            "/SD/Normal/../../cgi-bin/Config.cgi",
+            "/cgi-bin/Config.cgi%3Faction=del&property=x",
+            "/CGI-BIN/Config.cgi;action=del",
+            "cgi-bin/Config.cgi",
+            "/SD/Normal/F/A.MP4/../../../../cgi-bin/Config.cgi",
+            "\\cgi-bin\\Config.cgi",
+            "/SD/Normal/F/A.MP4?action=del",
+            "/SD/Normal/F/A.MP4#x"
+        )
+        for (path in hostile) {
+            val e = try {
+                Cam.download(Cam.Clip(path, 100, "", "", ""), MemorySink(), { false }) { _, _ -> }
+                null
+            } catch (e: IOException) {
+                e
+            }
+            assertTrue("$path -> $e", e is Cam.RefusedException)
+        }
+        assertTrue("nothing reached the camera", cam.requests.isEmpty())
     }
 
     @Test
@@ -444,8 +579,11 @@ class CamRequestTest {
                 assertTrue(r.target, r.target.startsWith("/SD/"))
             }
             for (word in listOf("set", "del", "format")) {
-                assertFalse("${r.target} contains action=$word", r.target.contains("action=$word"))
+                assertFalse("${r.target} contains action=$word", java.net.URLDecoder.decode(r.target, "UTF-8").contains("action=$word"))
             }
+            // The path as sent is the path as it will be understood: no "." or ".." or "//" to be resolved on the way.
+            assertEquals(r.path, r.resolved)
         }
+        assertTrue(cam.violations.isEmpty())
     }
 }

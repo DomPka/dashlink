@@ -171,6 +171,23 @@ class CamParseTest {
     }
 
     @Test
+    fun page_countsEveryEntryTheCameraSent_clipOrNot() {
+        // The next page starts after everything the camera sent, so entries that are not clips still count.
+        val page = Cam.parsePage(
+            "<DCIM><file><name>/SD/Normal/F/A.MP4</name></file>" +
+                "<file><name>/SD/Normal/sub/</name></file>" +          // a folder
+                "<file><size>5</size></file>" +                         // no name at all
+                "<file><name>/SD/Normal/F/B.MP4</name></file>" +
+                "<file><name>/SD/Normal/F/C.MP4</name>" +               // cut off: not an entry
+                "<amount>4</amount></DCIM>"
+        )
+        assertEquals(listOf("A.MP4", "B.MP4"), page.clips.map { it.name })
+        assertEquals(4, page.entries)
+        assertEquals(0, Cam.parsePage("0\nOK\n").entries)
+        assertEquals(0, Cam.parsePage("").entries)
+    }
+
+    @Test
     fun list_twentyThousandEntries() {
         val sb = StringBuilder("<DCIM>")
         for (i in 0 until 20_000) {

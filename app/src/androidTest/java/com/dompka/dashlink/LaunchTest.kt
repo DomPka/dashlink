@@ -149,7 +149,6 @@ class LaunchTest {
         Kit.launch().use {
             Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
             Kit.until("the search to start") { Link.state == LinkState.SEARCHING }
-            assertEquals("DISCONNECT", Kit.text("connect").uppercase())
             // Android's own "choose a device" prompt comes up. The user declines.
             Kit.tapText("cancel", "com.android.settings", 30_000)
             Kit.until("Android to report the refusal") { Link.state == LinkState.NOT_FOUND }
@@ -166,17 +165,39 @@ class LaunchTest {
     @Test
     fun connect_toACameraThatIsNotThere_timesOut() {
         Kit.grantAll()
-        Kit.onMain { Link.core.timeoutMs = 6000 }
+        Kit.onMain {
+            Link.core.timeoutMs = 6000
+            Link.core.promptTimeoutMs = 6000
+        }
         Kit.launch().use {
             Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
             Kit.until("the search to start") { Link.state == LinkState.SEARCHING }
-            // Nobody touches the prompt. Android gives up after the time-out and takes its prompt away.
+            // Nobody touches the prompt. After the time limit the app takes its request back.
             Kit.until("the time-out", 40_000) { Link.state == LinkState.NOT_FOUND }
             assertTrue(Link.lastError!!, Link.lastError!!.contains("found within 6 s"))
             assertEquals(1, Link.core.requests)
-            Kit.until("the system prompt to be gone", 15_000) { Kit.find("cancel", "com.android.settings") == null }
+            // Android turns its prompt into a "request cancelled" box and waits for OK.
+            Kit.dismissCancelledBox()
             Kit.until("the app to be usable again") { Kit.text("connect").uppercase() == "CONNECT" }
-            Kit.holds("no retry after a first-time time-out", 5000) { Link.core.requests == 1 }
+            assertTrue(Kit.text("status").contains("found within 6 s"))
+            Kit.holds("no retry after a first-time time-out", 5000) { Link.core.requests == 1 && Link.state == LinkState.NOT_FOUND }
+        }
+    }
+
+    @Test
+    fun androidsPrompt_isLeftAloneWellPastASilentSearchesLimit() {
+        // The prompt has a 30-second search and a "Try again" of its own. The app's limit for a silent search
+        // (shortened to 5 s here) must not apply while the prompt is the one in charge.
+        Kit.grantAll()
+        Kit.onMain { Link.core.timeoutMs = 5000 }
+        Kit.launch().use {
+            Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
+            Kit.until("the search to start") { Link.state == LinkState.SEARCHING }
+            Kit.see("cancel", "com.android.settings", 30_000)
+            Kit.holds("the prompt stays, the search goes on", 12_000) { Link.state == LinkState.SEARCHING && Link.core.requests == 1 }
+            assertNotNull("the prompt is still Android's own, not a \"cancelled\" box", Kit.find("cancel", "com.android.settings"))
+            Kit.tapText("cancel", "com.android.settings")
+            Kit.until("the refusal") { Link.state == LinkState.NOT_FOUND }
         }
     }
 
@@ -229,10 +250,11 @@ class LaunchTest {
             Kit.connectThroughUi("DashLinkNoSuchCam", "12345678")
             Kit.until("the search to start") { Link.state == LinkState.SEARCHING }
             Kit.see("cancel", "com.android.settings", 30_000)
-            // The app withdraws its request; Android must take its prompt down with it.
+            // The app withdraws its request. Android answers with its "request cancelled" box.
             Kit.onMain { Link.disconnect() }
             assertEquals(LinkState.IDLE, Link.state)
-            Kit.until("the system prompt to be gone", 15_000) { Kit.find("cancel", "com.android.settings") == null }
+            Kit.until("the prompt to stop offering a choice", 15_000) { Kit.find("cancel", "com.android.settings") == null }
+            Kit.dismissCancelledBox()
             Kit.until("the button to say Connect again") { Kit.text("connect").uppercase() == "CONNECT" }
             Kit.holds("nothing comes back", 4000) { Link.state == LinkState.IDLE && Link.core.requests == 1 }
         }

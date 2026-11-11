@@ -67,17 +67,35 @@ internal class MediaFiles(private val ctx: Context) : Runner.Store {
         return false
     }
 
-    private fun isPending(uri: Uri): Boolean {
-        try {
-            val args = Bundle()
-            args.putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
-            resolver.query(uri, arrayOf(MediaStore.MediaColumns.IS_PENDING), args, null)?.use {
-                return it.moveToFirst() && it.getInt(0) == 1
-            }
-        } catch (e: Exception) {
-            // gone
+    private enum class Row { PENDING, PUBLISHED, GONE }
+
+    /**
+     * What has become of an item this app created. Throws if MediaStore cannot be asked right now -
+     * "could not ask" must never be mistaken for "gone", or a good part would be thrown away.
+     */
+    private fun row(uri: Uri): Row {
+        val args = Bundle()
+        args.putInt(MediaStore.QUERY_ARG_MATCH_PENDING, MediaStore.MATCH_INCLUDE)
+        val cursor = resolver.query(uri, arrayOf(MediaStore.MediaColumns.IS_PENDING), args, null)
+            ?: throw Cam.StorageException("shared storage did not answer")
+        cursor.use {
+            if (!it.moveToFirst()) return Row.GONE
+            return if (it.getInt(0) == 1) Row.PENDING else Row.PUBLISHED
         }
-        return false
+    }
+
+    override fun published(job: Job): Boolean {
+        val uri = job.dest?.let { Uri.parse(it) } ?: return false
+        val done = try {
+            row(uri) == Row.PUBLISHED
+        } catch (e: Exception) {
+            false               // open() will ask again and report the trouble properly
+        }
+        if (done) {
+            job.dest = null
+            Jobs.save()
+        }
+        return done
     }
 
     private fun create(name: String): Uri {
@@ -107,17 +125,31 @@ internal class MediaFiles(private val ctx: Context) : Runner.Store {
     override fun open(job: Job): Runner.Out {
         val name = job.clip.name
         try {
-            val old = job.dest?.let { Uri.parse(it) }
+            var old = job.dest?.let { Uri.parse(it) }
+            if (old != null && (old.scheme != ContentResolver.SCHEME_CONTENT || old.authority != MediaStore.AUTHORITY)) {
+                // Not an address MediaStore ever gave out (a damaged saved queue): there is nothing to continue.
+                old = null
+                job.dest = null
+            }
             if (old != null) {
-                if (isPending(old)) {
-                    try {
+                when (row(old)) {
+                    Row.PENDING -> try {
                         return openForWriting(old)
                     } catch (e: Exception) {
                         // The entry is there but its file cannot be written: replace it below.
+                        discard(job)
+                    }
+                    // Already a finished file (see published()): it is not this job's to overwrite or delete.
+                    Row.PUBLISHED -> {
+                        job.dest = null
+                        Jobs.save()
+                    }
+                    // Expired after a week, or removed by the user: start this clip over.
+                    Row.GONE -> {
+                        job.dest = null
+                        Jobs.save()
                     }
                 }
-                // Expired after a week, removed by the user, or unusable: start this clip over.
-                discard(job)
             }
             val uri = create(name)
             job.dest = uri.toString()
@@ -163,6 +195,15 @@ internal class MediaFiles(private val ctx: Context) : Runner.Store {
      * folders are touched, and MediaStore only ever shows this app its own. Returns how many were removed.
      */
     fun sweep(keep: Set<String>): Int {
+        // Compared by row number, not by the spelling of the address.
+        val keepIds = HashSet<Long>()
+        for (k in keep) {
+            try {
+                keepIds.add(ContentUris.parseId(Uri.parse(k)))
+            } catch (e: Exception) {
+                // not one of ours
+            }
+        }
         var removed = 0
         for ((collection, dir) in listOf(videos to movieDir, images to pictureDir, downloads to otherDir)) {
             try {
@@ -176,8 +217,8 @@ internal class MediaFiles(private val ctx: Context) : Runner.Store {
                 val stale = ArrayList<Uri>()
                 resolver.query(collection, arrayOf(MediaStore.MediaColumns._ID), args, null)?.use { c ->
                     while (c.moveToNext()) {
-                        val uri = ContentUris.withAppendedId(collection, c.getLong(0))
-                        if (uri.toString() !in keep) stale.add(uri)
+                        val id = c.getLong(0)
+                        if (id !in keepIds) stale.add(ContentUris.withAppendedId(collection, id))
                     }
                 }
                 for (uri in stale) {

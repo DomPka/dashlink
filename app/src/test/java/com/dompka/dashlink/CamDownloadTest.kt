@@ -34,6 +34,7 @@ class CamDownloadTest {
         Cam.opener = Cam.Opener { throw IOException("no camera in this test") }
         Cam.downloadTimeoutMs = 15_000
         dir.deleteRecursively()
+        assertTrue("something other than a read was sent: ${cam.violations.map { it.target }}", cam.violations.isEmpty())
     }
 
     private fun dest() = File(dir, name)
@@ -128,17 +129,21 @@ class CamDownloadTest {
     }
 
     @Test
-    fun rangeNotSatisfiable_416_withoutDetails() {
-        cam.addFile("Normal", name, 90_000)
-        cam.override = { if ('?' in it.target) null else FakeCam.Reply(416) }
-        // Size unknown everywhere: the only reading left is "already complete" (as the camera's own app assumes).
-        dest().writeBytes(ByteArray(10) { 1 })
-        assertEquals(null, attempt(Cam.Clip(path, -1, "", "", "")))
-        assertEquals(10L, dest().length())
-        // Size known and not reached: the part is thrown away and the caller is told to start over.
-        val e = attempt(Cam.Clip(path, 90_000, "", "", ""))
-        assertTrue("$e", e is Cam.RestartException)
-        assertEquals(0L, dest().length())
+    fun rangeNotSatisfiable_416_withoutDetails_isNeverTakenForComplete() {
+        // A bare 416 says "not from there" and nothing else. Version 0.1 read it as "you have it all" when
+        // the list gave no size - and would have published a ten-byte stump as a finished clip.
+        val data = cam.addFile("Normal", name, 90_000)
+        cam.override = { if (it.rangeStart < 0) null else FakeCam.Reply(416) }
+        for (clip in listOf(Cam.Clip(path, -1, "", "", ""), Cam.Clip(path, 90_000, "", "", ""))) {
+            dest().writeBytes(ByteArray(10) { 1 })
+            val e = attempt(clip)
+            assertTrue("$e", e is Cam.RestartException)
+            assertEquals("the stump is thrown away", 0L, dest().length())
+            // The next attempt asks for the whole file and gets it.
+            assertEquals(null, attempt(clip))
+            assertArrayEquals(data, dest().readBytes())
+            dest().delete()
+        }
     }
 
     @Test
@@ -157,8 +162,9 @@ class CamDownloadTest {
             }
             val first = attempt(clip)
             assertTrue("hard=$hard: a cut must be reported, got $first", first is IOException)
-            assertFalse("a dropped link is not a storage, restart or cancel problem: $first",
-                first is Cam.StorageException || first is Cam.RestartException || first is Cam.CancelledException || first is Cam.HttpException)
+            assertFalse("a dropped link is not a storage, restart, cancel or \"this clip\" problem: $first",
+                first is Cam.StorageException || first is Cam.RestartException || first is Cam.CancelledException ||
+                    first is Cam.HttpException || first is Cam.NoDataException || first is Cam.RefusedException)
             val kept = dest().length()
             assertTrue("hard=$hard kept=$kept", kept in 1..150_000)
             assertArrayEquals("what was kept is the start of the file", data.copyOf(kept.toInt()), dest().readBytes())
@@ -269,12 +275,43 @@ class CamDownloadTest {
         cam.override = { if ('?' in it.target) null else FakeCam.Reply(200) }
         for (clip in listOf(cam.clip(path), Cam.Clip(path, -1, "", "", ""))) {
             val e = attempt(clip)
-            assertTrue("$e", e is IOException && e !is Cam.HttpException)
+            assertTrue("$e", e is Cam.NoDataException)
             assertEquals(0L, dest().length())
         }
         // The same without a Content-Length: an empty stream.
         cam.override = { if ('?' in it.target) null else FakeCam.Reply(200).also { r -> r.sendLength = false } }
-        assertTrue(attempt(Cam.Clip(path, -1, "", "", "")) is IOException)
+        assertTrue(attempt(Cam.Clip(path, -1, "", "", "")) is Cam.NoDataException)
+        // And a reply that is announced and then never comes: the camera answered, the clip did not.
+        Cam.downloadTimeoutMs = 300
+        cam.override = { if ('?' in it.target) null else FakeCam.Reply(200, ByteArray(500)).also { r -> r.cutAfter = 0 } }
+        assertTrue(attempt(cam.clip(path)) is Cam.NoDataException)
+    }
+
+    @Test
+    fun resumeThatBringsNothing() {
+        val data = cam.addFile("Normal", name, 1000)
+        // The camera accepts the resume point and then sends no bytes at all.
+        cam.override = {
+            if (it.rangeStart < 0) null else FakeCam.Reply(206).also { r -> r.headers["Content-Range"] = "bytes ${it.rangeStart}-999/1000" }
+        }
+        // Size known and not reached: this clip is in trouble (a damaged spot on the card, say). Not a link problem.
+        dest().writeBytes(data.copyOf(400))
+        val e = attempt(cam.clip(path))
+        assertTrue("$e", e is Cam.NoDataException)
+        assertEquals("the part is kept", 400L, dest().length())
+
+        // The camera says the file is exactly as long as what the phone has: nothing was left to send.
+        cam.override = {
+            if (it.rangeStart < 0) null else FakeCam.Reply(206).also { r -> r.headers["Content-Range"] = "bytes ${it.rangeStart}-399/400" }
+        }
+        assertEquals(null, attempt(Cam.Clip(path, -1, "", "", "")))
+        assertEquals(400L, dest().length())
+
+        // No size from the list, none from the camera: whether 400 bytes is all of it cannot be known. Start over.
+        cam.override = { if (it.rangeStart < 0) null else FakeCam.Reply(206) }
+        val unsure = attempt(Cam.Clip(path, -1, "", "", ""))
+        assertTrue("$unsure", unsure is Cam.RestartException)
+        assertEquals(0L, dest().length())
     }
 
     @Test
@@ -306,6 +343,72 @@ class CamDownloadTest {
         cam.override = { if ('?' in it.target) null else FakeCam.Reply(206, data.copyOfRange(40_000, 100_000)) }
         assertEquals(null, attempt(cam.clip(path)))
         assertArrayEquals(data, dest().readBytes())
+    }
+
+    @Test
+    fun contentRangeWrittenSloppily_orNotAtAll() {
+        val data = cam.addFile("Normal", name, 100_000)
+        fun reply(header: String, from: Int) = { req: FakeCam.Request ->
+            if ('?' in req.target) null else FakeCam.Reply(206, data.copyOfRange(from, 100_000)).also { it.headers["Content-Range"] = header }
+        }
+        // "=" where the space belongs, and no total: small web servers write it like this. Still readable.
+        for (header in listOf("bytes=40000-99999/100000", "bytes 40000-99999", "Bytes  40000-99999/*", "bytes:40000-")) {
+            dest().writeBytes(data.copyOf(40_000))
+            cam.override = reply(header, 40_000)
+            assertEquals(header, null, attempt(cam.clip(path)))
+            assertArrayEquals(header, data, dest().readBytes())
+        }
+        // The same spelling, but it is the whole file from the top: must not be glued onto the old part.
+        dest().writeBytes(ByteArray(40_000) { 3 })
+        cam.override = reply("bytes=0-99999/100000", 0)
+        assertEquals(null, attempt(cam.clip(path)))
+        assertArrayEquals(data, dest().readBytes())
+        // A header that is there but makes no sense is not "no header": the part cannot be continued on trust.
+        for (header in listOf("pieces 1-2", "bytes abc-def/ghi", "bytes -5-10/100", "40000-99999/100000")) {
+            dest().writeBytes(data.copyOf(40_000))
+            cam.override = reply(header, 0)
+            val e = attempt(cam.clip(path))
+            assertTrue("$header -> $e", e is Cam.RestartException)
+            assertEquals(header, 0L, dest().length())
+        }
+    }
+
+    @Test
+    fun moreBytesThanTheFileHas_areNotKept() {
+        val data = cam.addFile("Normal", name, 1000)
+        dest().writeBytes(data.copyOf(400))
+        // The camera says the file has 1000 bytes and then sends 900 more after byte 400.
+        cam.override = {
+            if ('?' in it.target) null else FakeCam.Reply(206, ByteArray(900) { 5 }).also { r -> r.headers["Content-Range"] = "bytes 400-999/1000" }
+        }
+        val e = attempt(cam.clip(path))
+        assertTrue("$e", e is Cam.RestartException)
+        assertEquals(0L, dest().length())
+    }
+
+    @Test(timeout = 20_000)
+    fun waitingForTheCameraToBeFree_stillHearsStop() {
+        cam.addFile("Normal", name, 1000)
+        val inside = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        // Something else has the camera for a long time (a listing of thousands of files, say).
+        val holder = Thread {
+            Cam.session {
+                inside.countDown()
+                release.await()
+            }
+        }
+        holder.start()
+        inside.await()
+        val started = System.currentTimeMillis()
+        val e = attempt(cam.clip(path), cancelled = { System.currentTimeMillis() - started > 600 })
+        assertTrue("$e", e is Cam.CancelledException)
+        assertTrue("Stop was heard while waiting", System.currentTimeMillis() - started < 5000)
+        assertTrue(cam.requests.isEmpty())
+        release.countDown()
+        holder.join()
+        // And once the camera is free the download simply runs.
+        assertEquals(null, attempt(cam.clip(path)))
     }
 
     @Test
@@ -360,16 +463,27 @@ class CamDownloadTest {
 
     @Test
     fun unusualFileNames_reachTheCameraIntact() {
-        val odd = "/SD/Photo/F/my photo #1 (50%) ä?.JPG"
+        val odd = "/SD/Photo/F/my photo (1) ä & b=c;d,e+f!.JPG"
         cam.files[odd] = byteArrayOf(1, 2, 3, 4)
         assertEquals(null, attempt(Cam.Clip(odd, 4, "", "", "")))
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), dest().readBytes())
         val sent = cam.fileRequests().single().target
-        assertFalse("nothing in a file name may start a query: $sent", '?' in sent || '#' in sent || ' ' in sent)
+        assertFalse("spaces and accents travel escaped: $sent", ' ' in sent || 'ä' in sent || '?' in sent || '#' in sent)
+        assertEquals(odd, cam.fileRequests().single().path)
         // A path without the leading slash is made absolute rather than glued to the address.
         dest().delete()
         cam.files["/SD/Photo/F/plain.JPG"] = byteArrayOf(5)
         assertEquals(null, attempt(Cam.Clip("SD/Photo/F/plain.JPG", 1, "", "", "")))
         assertEquals("/SD/Photo/F/plain.JPG", cam.fileRequests().last().target)
+    }
+
+    @Test
+    fun fileNamesNoCameraWouldUse_areNotAskedFor() {
+        // Nothing in a file name may ever start a query, hide a path, or be read two ways.
+        for (name in listOf("a?b.MP4", "a#b.MP4", "a%3Fb.MP4", "a%2e%2e.MP4", "a\\b.MP4", "a\u0000b.MP4", "a\nb.MP4")) {
+            val e = attempt(Cam.Clip("/SD/Normal/F/$name", 4, "", "", ""))
+            assertTrue("$name -> $e", e is Cam.RefusedException)
+        }
+        assertTrue(cam.requests.isEmpty())
     }
 }

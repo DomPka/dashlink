@@ -315,6 +315,35 @@ class DownloadTest {
         }
     }
 
+    @Test
+    fun clipPublishedJustBeforeTheAppWasKilled_isLeftAlone() {
+        val a = name("A")
+        val data = cam.addFile("Normal", a, 150_000)
+        connect()
+        Kit.launch().use {
+            assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
+            waitSaved(a)
+            assertServiceGone()
+            val file = published(a)
+            val requests = cam.fileRequests().size
+
+            // What a new process finds if Android killed the old one between making the clip visible and
+            // writing that down: the clip still queued, still pointing at the (now finished) file.
+            val again = Job(cam.clip("/SD/Normal/F/$a"))
+            again.dest = file.uri.toString()
+            Jobs.all.add(again)
+            assertNull(DownloadService.start(Kit.ctx))
+            Kit.until("the restored job to be recognised as done") { again.state == Jobs.SAVED }
+            assertNull(again.dest)
+            assertServiceGone()
+            assertEquals("not fetched again", requests, cam.fileRequests().size)
+            val still = Kit.stored(tag)
+            assertEquals("the finished clip was neither deleted nor doubled", listOf(file.uri), still.map { it.uri })
+            assertFalse(still.single().pending)
+            assertArrayEquals(data, Kit.bytes(file.uri))
+        }
+    }
+
     // ---------------------------------------------------------------- the app is killed
 
     @Test

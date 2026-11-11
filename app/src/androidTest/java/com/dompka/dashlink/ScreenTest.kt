@@ -1,5 +1,6 @@
 package com.dompka.dashlink
 
+import android.content.Intent
 import android.os.SystemClock
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.uiautomator.By
@@ -38,6 +39,7 @@ class ScreenTest {
     @After
     fun tearDown() {
         try {
+            Kit.shell("settings put system font_scale 1.0")
             Kit.shell("wm size reset")
             Kit.shell("wm density reset")
             Kit.device.setOrientationNatural()
@@ -62,6 +64,12 @@ class ScreenTest {
 
     /** How often the camera was asked for a file list. */
     private fun listings() = cam.requests.count { it.query["action"] == "dir" || it.query["action"] == "reardir" }
+
+    private fun listSize(): Int {
+        var n = 0
+        Kit.onMain { n = Browser.clips.size }
+        return n
+    }
 
     /** The ticked clips as the app holds them, whatever part of the list happens to be on screen. */
     private fun ticked(): Set<String> {
@@ -110,6 +118,36 @@ class ScreenTest {
             Kit.until("the new screen to show the disconnect") { Kit.text("status").startsWith("Not connected to the camera.") }
             assertEquals(LinkState.IDLE, Link.state)
             assertEquals("CONNECT", Kit.text("connect").uppercase())
+        }
+    }
+
+    @Test
+    fun rebuiltFromAnOlderPicture_theTicksStayOnTheRightClips() {
+        Kit.launch().use {
+            val names = connectedWithTwoTicked()            // on screen, newest first: C, B*, A*
+            // The screen goes away. Android saves what it looked like: rows 2 and 3 ticked.
+            Kit.device.pressHome()
+            SystemClock.sleep(2000)
+            // Meanwhile the camera records a new clip and the list is read again: D, C, B*, A*.
+            val newest = name("D")
+            cam.addFile("Normal", newest, 2000, "2026-03-01 10:09:00")
+            Kit.onMain { Browser.load() }
+            Kit.until("the list of four") { ticked().size == 2 && listSize() == 4 }
+            // Then something makes Android rebuild the screen from the picture it saved (here: a new font size).
+            Kit.shell("settings put system font_scale 1.15")
+            Kit.ctx.startActivity(Intent(Kit.ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            Kit.until("the rebuilt screen") { Kit.text("progress").contains("Normal: 4 files") }
+            SystemClock.sleep(1000)
+            // The ticks must be where the user put them, not on the rows that used to be second and third.
+            assertTrue("A", isTicked(names[0]))
+            assertTrue("B", isTicked(names[1]))
+            assertFalse("C was never ticked", isTicked(names[2]))
+            assertFalse("the new clip was never ticked", isTicked(newest))
+            assertEquals(setOf(names[0], names[1]), ticked())
+            // And what gets downloaded is what looks ticked.
+            Kit.tap("download")
+            Kit.until("the two ticked clips to be saved", 60_000) { Jobs.all.count { it.state == Jobs.SAVED } == 2 }
+            assertEquals(setOf(names[0], names[1]), Jobs.all.map { it.clip.name }.toSet())
         }
     }
 

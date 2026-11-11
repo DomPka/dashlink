@@ -68,6 +68,7 @@ class MainActivity : Activity() {
     private var startProblem: String? = null
     private var resumed = false
     private var askedAt = 0L
+    private var asking = false
     private var autoStartAt = 0L
     private var ticks = 0
 
@@ -94,6 +95,7 @@ class MainActivity : Activity() {
         val missing = Report.missingPermissions(this)
         if (savedInstanceState == null && missing.isNotEmpty() && !prefs.getBoolean("askedPermissions", false)) {
             prefs.edit().putBoolean("askedPermissions", true).apply()
+            asking = true
             requestPermissions(toRequest(missing), ASK_FIRST)
         }
         render()
@@ -124,9 +126,10 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        // Both arrays are empty when the request was interrupted, so they are not looked at:
-        // what is granted is read back from the system.
-        if (requestCode == ASK_AGAIN && Report.missingPermissions(this).isNotEmpty() &&
+        asking = false
+        // Both arrays are empty when the request was interrupted; nothing is read from them. What is
+        // granted is read back from the system.
+        if (requestCode == ASK_AGAIN && permissions.isNotEmpty() && Report.missingPermissions(this).isNotEmpty() &&
             SystemClock.elapsedRealtime() - askedAt < 500
         ) {
             // Android answered without showing its dialog ("don't ask again"): the switch is in Settings now.
@@ -239,6 +242,12 @@ class MainActivity : Activity() {
         list = ListView(this)
         list.id = R.id.list
         list.choiceMode = ListView.CHOICE_MODE_MULTIPLE
+        // Which rows are ticked, which folder is chosen and whether "Rear cam" is on live in Browser. Android
+        // must not restore its own, older picture of them over that when the screen is rebuilt: the list may
+        // have changed in the meantime, and the ticks would then sit on the wrong clips.
+        list.isSaveEnabled = false
+        folderSpin.isSaveEnabled = false
+        rearBox.isSaveEnabled = false
         list.adapter = clipAdapter
         list.setOnItemClickListener { _, _, position, _ ->
             val clip = clipAdapter.items.getOrNull(position) ?: return@setOnItemClickListener
@@ -459,8 +468,13 @@ class MainActivity : Activity() {
         val missing = Report.missingPermissions(this)
         if (missing.isNotEmpty()) {
             return Notice(explain(missing), "Allow") {
-                askedAt = SystemClock.elapsedRealtime()
-                requestPermissions(toRequest(missing), ASK_AGAIN)
+                // One question at a time: a second request while Android's dialog is up is answered
+                // at once with nothing, which would look like "don't ask again".
+                if (!asking) {
+                    asking = true
+                    askedAt = SystemClock.elapsedRealtime()
+                    requestPermissions(toRequest(missing), ASK_AGAIN)
+                }
             }
         }
         if (waiting > 0 && !Power.exempt(this)) {

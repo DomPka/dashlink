@@ -42,6 +42,9 @@ internal object Kit {
         device.wakeUp()
         shell("wm dismiss-keyguard")
         shell("settings put secure show_ime_with_hard_keyboard 0")
+        // Android's Wi-Fi prompt lives in the Settings app, and a box it left open in an earlier test
+        // would sit in front of the next one.
+        shell("am force-stop com.android.settings")
         shell("svc wifi enable")
         until("Wi-Fi to be on", 30_000) { wifi.isWifiEnabled }
         shell("dumpsys deviceidle whitelist ${if (batteryExempt) "+" else "-"}$PKG")
@@ -117,9 +120,14 @@ internal object Kit {
 
     // ---------------------------------------------------------------- the app's own screen
 
+    private val permissionButtons = By.res(Pattern.compile(".*:id/permission_(allow|deny).*button"))
+
+    /** Starts the app. On a first start Android's permission question covers the screen at once; that counts as started. */
     fun launch(): ActivityScenario<MainActivity> {
         val scenario = ActivityScenario.launch(MainActivity::class.java)
-        waitFor("the main screen", 30_000) { device.findObject(By.res(PKG, "status")) }
+        waitFor("the main screen or a permission question", 30_000) {
+            device.findObject(By.res(PKG, "status")) ?: device.findObject(permissionButtons)
+        }
         return scenario
     }
 
@@ -197,8 +205,24 @@ internal object Kit {
         return answered
     }
 
-    fun permissionDialogShowing(): Boolean =
-        device.findObject(By.res(Pattern.compile(".*:id/permission_(allow|deny).*button"))) != null
+    fun permissionDialogShowing(): Boolean = device.findObject(permissionButtons) != null
+
+    /**
+     * When the app ends a search while Android's Wi-Fi prompt is up (a time-out, or disconnecting),
+     * Android replaces the prompt with a box saying the application has cancelled the request, and
+     * leaves it there until someone taps OK. Taps it if it shows up.
+     */
+    fun dismissCancelledBox(waitMs: Long = 10_000): Boolean {
+        val ok = device.wait(Until.findObject(By.pkg("com.android.settings").res("android:id/button1")), waitMs)
+            ?: device.findObject(By.pkg("com.android.settings").text(Pattern.compile("ok", Pattern.CASE_INSENSITIVE)))
+            ?: return false
+        return try {
+            ok.click()
+            true
+        } catch (e: StaleObjectException) {
+            false
+        }
+    }
 
     /** Fills in the two fields and taps Connect, confirming the "one Wi-Fi radio" warning where the phone shows it. */
     fun connectThroughUi(ssid: String = "MiVue", pass: String = "12345678") {

@@ -59,13 +59,23 @@ internal class LinkCore(
     @Volatile var retries = 0
         private set
 
+    /** How long a silent search may take: an exact, known name that Android joins without asking anyone. */
     var timeoutMs = 45_000
+
+    /**
+     * How long Android's own "choose a device" prompt may stay up. It searches for 30 seconds and then
+     * offers "Try again" by itself; ending the request under it would replace that with a box saying
+     * "the application has cancelled the request". This limit is only there so that a prompt nobody
+     * answers does not keep the phone scanning for ever.
+     */
+    var promptTimeoutMs = 180_000
     var retryDelayMs = 3_000L
     var maxRetries = 20
 
     private var want: Want? = null
     private var active: Request? = null
     private var askedAt = 0L
+    private var limitMs = 0
     private var everConnected = false
     private var retryTimer: Any? = null
     private var watchdog: Any? = null
@@ -99,11 +109,12 @@ internal class LinkCore(
         val r = Request(w)
         active = r
         askedAt = timer.now()
+        limitMs = if (w.exact) timeoutMs else promptTimeoutMs
         requests++
         lastError = null
         state = LinkState.SEARCHING
         try {
-            radio.request(r, timeoutMs)
+            radio.request(r, limitMs)
         } catch (e: Exception) {
             // A permission was refused, the password cannot be a WPA2 passphrase, the system has too many requests…
             active = null
@@ -114,7 +125,7 @@ internal class LinkCore(
         }
         if (active === r && state == LinkState.SEARCHING) {
             // Safety net: Android promises onUnavailable() after the time-out. If it never says anything, stop waiting anyway.
-            watchdog = timer.after(timeoutMs + WATCHDOG_MS) {
+            watchdog = timer.after(limitMs + WATCHDOG_MS) {
                 watchdog = null
                 if (active === r && state == LinkState.SEARCHING) unavailable(r, timedOut = true)
             }
@@ -132,6 +143,12 @@ internal class LinkCore(
     fun onAvailable(r: Request, net: Any) {
         if (r !== active) return
         cancelWatchdog()
+        if (network != null && network != net) {
+            // A different network for the same request: what was learned about the old one's addresses is void.
+            cameraIp = null
+            ipRank = 0
+            addressInfo = null
+        }
         network = net
         everConnected = true
         retries = 0
@@ -171,7 +188,7 @@ internal class LinkCore(
     /** The system gave up on [r]: it timed out, the prompt was declined, the password was wrong, Wi-Fi is off… */
     fun onUnavailable(r: Request) {
         if (r !== active) return
-        unavailable(r, timedOut = timer.now() - askedAt >= timeoutMs - EARLY_MS)
+        unavailable(r, timedOut = timer.now() - askedAt >= limitMs - EARLY_MS)
     }
 
     private fun unavailable(r: Request, timedOut: Boolean) {
@@ -190,7 +207,7 @@ internal class LinkCore(
         lastError = when {
             !timedOut -> "Android could not join the camera's Wi-Fi: the prompt was declined, the password is wrong, or Wi-Fi is off."
             everConnected -> "The camera's Wi-Fi did not come back. Tap Connect to look for it again."
-            else -> "No camera Wi-Fi with that name was found within ${timeoutMs / 1000} s."
+            else -> "No camera Wi-Fi with that name was found within ${limitMs / 1000} s. Is Wi-Fi switched on in the camera's menu?"
         }
         move(LinkState.NOT_FOUND)
     }

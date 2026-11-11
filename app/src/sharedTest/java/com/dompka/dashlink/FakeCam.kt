@@ -57,6 +57,23 @@ class FakeCam : Closeable {
                 return out
             }
 
+        /**
+         * The path the way a web server would end up seeing it: escapes resolved, "." and ".." segments
+         * and doubled slashes folded away. (Android's own HTTP client does part of that before sending.)
+         */
+        val resolved: String
+            get() {
+                val out = ArrayList<String>()
+                for (seg in path.replace('\\', '/').split('/')) {
+                    when (seg) {
+                        "", "." -> Unit
+                        ".." -> if (out.isNotEmpty()) out.removeAt(out.size - 1)
+                        else -> out.add(seg)
+                    }
+                }
+                return "/" + out.joinToString("/")
+            }
+
         /** N from "Range: bytes=N-", or -1 when the request has no Range header. */
         val rangeStart: Long
             get() = headers["range"]?.substringAfter("bytes=", "")?.substringBefore('-')?.trim()?.toLongOrNull() ?: -1L
@@ -92,6 +109,13 @@ class FakeCam : Closeable {
 
     /** Every request received, in order. */
     val requests = CopyOnWriteArrayList<Request>()
+
+    /**
+     * Requests the app must never send: anything but GET, and anything aimed at the camera's command
+     * script that is not action=get / dir / reardir - however the path was spelled. Tests end by
+     * checking that this is empty.
+     */
+    val violations = CopyOnWriteArrayList<Request>()
 
     /** The most requests that were ever in progress at the same moment. */
     @Volatile
@@ -204,6 +228,7 @@ class FakeCam : Closeable {
         try {
             val req = readRequest(s) ?: return
             requests.add(req)
+            if (isViolation(req)) violations.add(req)
             val now = active.incrementAndGet()
             synchronized(this) { if (now > maxActive) maxActive = now }
             // The request counts as "in progress" until the moment its last bytes go out: from then on the
@@ -249,6 +274,16 @@ class FakeCam : Closeable {
         return Request(first[0], first[1], headers)
     }
 
+    private fun isViolation(req: Request): Boolean {
+        if (req.method != "GET") return true
+        val path = req.resolved.lowercase()
+        val everything = (path + "?" + req.target.substringAfter('?', "")).lowercase()
+        if (!path.contains("cgi") && '?' !in req.target) return false          // a plain file
+        // Something for the command script. Look at it the most suspicious way: decoded, wherever "action" appears.
+        val actions = Regex("action=([a-z0-9_]*)").findAll(java.net.URLDecoder.decode(everything, "UTF-8")).map { it.groupValues[1] }.toList()
+        return path != "/cgi-bin/config.cgi" || actions.size != 1 || actions[0] !in setOf("get", "dir", "reardir")
+    }
+
     private fun text(status: Int, body: String, type: String = "text/plain"): Reply {
         val r = Reply(status, body.toByteArray(Charsets.UTF_8))
         r.headers["Content-Type"] = type
@@ -279,8 +314,8 @@ class FakeCam : Closeable {
                     val count = q["count"]?.toIntOrNull() ?: 16
                     text(200, xml(all.drop(from).take(count)), "text/xml")
                 }
-                // The app must never get here: see ReadOnlyTest.
-                else -> text(200, "0\nOK\n")
+                // The app must never get here; if it does, the request is already in [violations].
+                else -> text(500, "709\n?\n")
             }
         }
         val data = files[req.path] ?: return text(404, "not found")

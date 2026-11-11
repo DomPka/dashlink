@@ -62,6 +62,15 @@ object Cam {
     /** Another request is still talking to the camera and did not finish in the time allowed. */
     class BusyException : IOException("the camera is busy with another request")
 
+    /** Not sent at all: it is not one of the reads this app may make. Trying again will not change that. */
+    class RefusedException(message: String) : IOException(message)
+
+    /**
+     * The camera answered the request for a file and then sent not a single new byte. Unlike a dropped
+     * link this is about that one file: if it keeps happening, the file cannot be had.
+     */
+    class NoDataException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
     /** Where a download is written. It outlives a single attempt, so the next attempt continues it. */
     interface Sink {
         /** Bytes already stored. */
@@ -138,21 +147,29 @@ object Cam {
     /**
      * Throws unless [pathAndQuery] is one of the reads this app is allowed to make: Config.cgi with
      * exactly one action out of get / dir / reardir, or a plain file. Every request passes through here.
+     *
+     * A file path is taken literally and must stay literal on its way to the camera. Android's HTTP
+     * client and most web servers quietly resolve "/./", "/../" and "//", and some decode "%3F" back
+     * into "?": a path built from those could arrive as a different request than the one checked
+     * here. So such paths are not cleaned up, they are refused.
      */
     @Throws(IOException::class)
     fun requireRead(pathAndQuery: String) {
         val q = pathAndQuery.indexOf('?')
         if (q < 0) {
-            // A file from the list: an absolute path that is not a script.
             val lower = pathAndQuery.lowercase(Locale.US)
-            val script = lower.startsWith("/cgi-bin") || lower.split('/').any { it.endsWith(".cgi") }
-            if (!pathAndQuery.startsWith("/") || pathAndQuery.contains('#') || script) {
-                throw IOException("refused: not a file on the camera: $pathAndQuery")
-            }
+            val ok = pathAndQuery.startsWith("/") &&
+                pathAndQuery.none { it == '#' || it == '\\' || it.code <= 0x20 || it.code >= 0x7f } &&
+                pathAndQuery.split('/').drop(1).none { it.isEmpty() || it == "." || it == ".." } &&
+                !lower.contains("cgi-bin") && !lower.contains(".cgi") &&
+                !hidesStructure(pathAndQuery)
+            if (!ok) throw RefusedException("refused: not a file on the camera: $pathAndQuery")
             return
         }
-        if (pathAndQuery.substring(0, q) != "/cgi-bin/Config.cgi") {
-            throw IOException("refused: unknown camera command: $pathAndQuery")
+        // Every query this app sends is spelled out in plain letters. An escape could only be there to
+        // hide something from this check that a camera might still read: "%26action%3Ddel".
+        if (pathAndQuery.substring(0, q) != "/cgi-bin/Config.cgi" || '%' in pathAndQuery || '#' in pathAndQuery) {
+            throw RefusedException("refused: unknown camera command: $pathAndQuery")
         }
         val actions = ArrayList<String>()
         for (pair in pathAndQuery.substring(q + 1).split('&')) {
@@ -160,8 +177,19 @@ object Cam {
             if (key.equals("action", ignoreCase = true)) actions.add(decode(pair.substringAfter('=', "")))
         }
         if (actions.size != 1 || actions[0] !in readActions) {
-            throw IOException("refused: only reading from the camera is allowed: $pathAndQuery")
+            throw RefusedException("refused: only reading from the camera is allowed: $pathAndQuery")
         }
+    }
+
+    /** True if a %XX escape in [path] stands for a character that has a meaning in a URL, or is not an escape at all. */
+    private fun hidesStructure(path: String): Boolean {
+        var i = path.indexOf('%')
+        while (i >= 0) {
+            val code = if (i + 2 < path.length) path.substring(i + 1, i + 3).toIntOrNull(16) else null
+            if (code == null || code < 0x20 || code == 0x7f || code.toChar() in "%?#/\\.") return true
+            i = path.indexOf('%', i + 1)
+        }
+        return false
     }
 
     private fun decode(s: String): String = try {
@@ -186,8 +214,18 @@ object Cam {
         return sb.toString()
     }
 
-    /** The request path for a file from the list: always absolute, and never able to turn into a command. */
-    fun filePath(path: String): String = escape(if (path.startsWith("/")) path else "/$path", "/-._~!$&'()*+,;=:@")
+    /**
+     * The request path for a file from the list: always absolute, with spaces and non-ASCII letters
+     * escaped. A name containing ? # % or a backslash is refused rather than escaped: no clip on a
+     * memory card is called that, and nothing in a file name may ever start a query.
+     */
+    @Throws(IOException::class)
+    fun filePath(path: String): String {
+        if (path.any { it == '?' || it == '#' || it == '%' || it == '\\' || it.code < 0x20 || it.code == 0x7f }) {
+            throw RefusedException("refused: not a file name a camera would use: $path")
+        }
+        return escape(if (path.startsWith("/")) path else "/$path", "/-._~!$&'()*+,;=:@")
+    }
 
     // ---------------------------------------------------------------- settings and file list
 
@@ -213,9 +251,18 @@ object Cam {
         }
     }
 
+    /**
+     * The folder names come from the camera's own settings. They go into the request as they are, so
+     * only names made of plain letters, digits, ".", "_" and "-" are accepted; anything else is refused
+     * rather than passed on in some escaped form.
+     */
+    @Throws(IOException::class)
     fun listUrl(folder: String, rear: Boolean, from: Int, count: Int): String {
         val action = if (rear) "reardir" else "dir"
-        val prop = escape(folder.substringBefore(',').replace("/", ""), "-._~")
+        val prop = folder.substringBefore(',').replace("/", "")
+        if (prop.isEmpty() || prop.any { !(it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "._-") }) {
+            throw RefusedException("refused: not a folder name a camera would use: $folder")
+        }
         return "/cgi-bin/Config.cgi?action=$action&property=$prop&count=$count&from=$from&format=all&backward="
     }
 
@@ -223,9 +270,10 @@ object Cam {
         parseList(get(listUrl(folder, rear, from, count), 15000))
 
     /**
-     * Reads a whole folder, [PAGE] files at a time, newest first. It always ends: on an empty page, on a
-     * page with nothing new (a camera that repeats itself), at [MAX_FILES], or when [keepGoing] says no.
-     * A failure part-way does not lose what was already read; it comes back in [Listing.error].
+     * Reads a whole folder, [PAGE] files at a time, newest first. It always ends: on an empty page, on
+     * two pages in a row with nothing new (a camera that repeats itself), at [MAX_FILES], or when
+     * [keepGoing] says no. A failure part-way does not lose what was already read; it comes back in
+     * [Listing.error].
      */
     fun listAll(folder: String, rear: Boolean, keepGoing: () -> Boolean, loaded: (count: Int) -> Unit): Listing {
         val all = ArrayList<Clip>()
@@ -235,15 +283,26 @@ object Cam {
         try {
             session {
                 var pages = 0
+                var from = 0
+                var barren = 0
                 while (keepGoing()) {
                     if (all.size >= MAX_FILES || pages >= MAX_PAGES) {
                         truncated = true
                         break
                     }
-                    val page = list(folder, rear, all.size, PAGE)
+                    val page = parsePage(get(listUrl(folder, rear, from, PAGE), 15000))
                     pages++
-                    val fresh = page.filter { seen.add(it.path) }
-                    if (fresh.isEmpty()) break
+                    if (page.entries == 0) break               // the end of the folder
+                    // The next page starts after everything the camera sent, whether or not it was a clip.
+                    from += page.entries
+                    val fresh = page.clips.filter { seen.add(it.path) }
+                    if (fresh.isEmpty()) {
+                        // Entries that are not clips, or a camera repeating itself. One such page is
+                        // passed over; a second one in a row means there is no point in asking on.
+                        if (++barren >= 2) break
+                        continue
+                    }
+                    barren = 0
                     all.addAll(fresh)
                     loaded(all.size)
                 }
@@ -327,8 +386,14 @@ object Cam {
         }
     }
 
-    fun parseList(xml: String): List<Clip> {
+    /** One reply to a list request: the clips in it, and how many entries the camera sent (not all need be clips). */
+    class Page(val clips: List<Clip>, val entries: Int)
+
+    fun parseList(xml: String): List<Clip> = parsePage(xml).clips
+
+    fun parsePage(xml: String): Page {
         val out = ArrayList<Clip>()
+        var entries = 0
         var i = 0
         while (true) {
             val start = openTag(xml, "file", i)
@@ -336,6 +401,7 @@ object Cam {
             val end = xml.indexOf("</file>", start)
             if (end < 0) break
             i = end + 7
+            entries++
             val b = xml.substring(start, end)
             val path = tag(b, "name") ?: continue
             if (path.substringAfterLast('/').isEmpty()) continue      // a folder or an empty entry, not a clip
@@ -350,23 +416,34 @@ object Cam {
                 )
             )
         }
-        return out
+        return Page(out, entries)
     }
 
     // ---------------------------------------------------------------- files
 
-    // Content-Range as (first byte, total size): "bytes 100-999/1000" gives (100, 1000). The first byte
-    // is -1 for the "no such range" form a 416 carries, and the total is -1 when the camera does not say.
-    private fun contentRange(header: String?): Pair<Long, Long>? {
-        val h = header?.trim() ?: return null
-        if (!h.startsWith("bytes", ignoreCase = true)) return null
-        val spec = h.substring(5).trim()
+    /** What a Content-Range header says. [start] is -1 for the "no such range" form; [total] is -1 when it is not given. */
+    private class Range(val start: Long, val total: Long)
+
+    /** A Content-Range header that is there but makes no sense. */
+    private val unreadable = Range(-2, -1)
+
+    /**
+     * Reads "bytes 100-999/1000" - also with "=" where the space belongs and without the total, as
+     * some small web servers write it. Null means there is no header at all; [unreadable] means there
+     * is one that cannot be understood. The two must not be confused: no header can be taken on
+     * trust, a garbled one cannot.
+     */
+    private fun contentRange(header: String?): Range? {
+        val h = header?.trim()
+        if (h.isNullOrEmpty()) return null
+        if (!h.startsWith("bytes", ignoreCase = true)) return unreadable
+        val spec = h.substring(5).trimStart(' ', '\t', '=', ':')
         val slash = spec.indexOf('/')
-        if (slash < 0) return null
-        val total = spec.substring(slash + 1).trim().toLongOrNull() ?: -1L
-        val range = spec.substring(0, slash).trim()
-        val start = if (range == "*") -1L else range.substringBefore('-').trim().toLongOrNull() ?: return null
-        return Pair(start, total)
+        val span = (if (slash >= 0) spec.substring(0, slash) else spec).trim()
+        val total = if (slash >= 0) spec.substring(slash + 1).trim().toLongOrNull() ?: -1L else -1L
+        if (span == "*") return Range(-1, total)
+        val first = span.substringBefore('-').trim().toLongOrNull() ?: return unreadable
+        return if (first < 0) unreadable else Range(first, total)
     }
 
     private inline fun <T> storage(what: String, block: () -> T): T = try {
@@ -382,12 +459,29 @@ object Cam {
      * Returns normally only when the file is complete. Otherwise it throws:
      *  - [CancelledException] when [cancelled] said so,
      *  - [StorageException] when the phone side failed,
+     *  - [RefusedException] when the clip's path is not something this app will ask for,
      *  - [HttpException] when the camera refused,
+     *  - [NoDataException] when the camera answered and then sent nothing new,
      *  - [RestartException] when the part on the phone had to be thrown away,
      *  - any other IOException when the link dropped (call again to continue from the same byte).
      */
     fun download(clip: Clip, sink: Sink, cancelled: () -> Boolean, progress: (have: Long, total: Long) -> Unit) {
-        exclusive(FOREVER) { transfer(clip, sink, cancelled, progress) }
+        // Waiting for the camera to be free (a long file listing may be under way) must not be deaf to Stop.
+        while (true) {
+            if (cancelled()) throw CancelledException()
+            val mine = try {
+                gate.tryLock(250, TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw InterruptedIOException("interrupted while waiting for the camera")
+            }
+            if (mine) break
+        }
+        try {
+            transfer(clip, sink, cancelled, progress)
+        } finally {
+            gate.unlock()
+        }
     }
 
     private fun transfer(clip: Clip, sink: Sink, cancelled: () -> Boolean, progress: (Long, Long) -> Unit) {
@@ -400,18 +494,34 @@ object Cam {
             if (have > 0) c.setRequestProperty("Range", "bytes=$have-")
             // What the camera says it is sending is believed over the size in the file list: the list
             // can be stale (a clip still being recorded), the transfer cannot.
-            var total = -1L
+            var total = -1L             // how long the camera says the file is
+            var fileSize = false        // …and whether it said so about the file itself (Content-Range), not just this reply
             when (val code = c.responseCode) {
                 206 -> {
                     val range = contentRange(c.getHeaderField("Content-Range"))
-                    val start = if (range == null || range.first < 0) have else range.first
-                    if (start != have) {
+                    // No Content-Range: trusted to be what was asked for. One that says something else, or
+                    // that cannot be read: appending these bytes could silently corrupt the clip.
+                    val from = when {
+                        range == null -> have
+                        range === unreadable -> if (have == 0L) 0L else -2L
+                        else -> range.start
+                    }
+                    if (from != have) {
                         storage("reset the unfinished file") { sink.truncate(0) }
-                        if (start != 0L) throw RestartException("the camera sent bytes from $start instead of $have")
+                        if (from != 0L) {
+                            throw RestartException(
+                                if (from == -2L) "the camera did not say which part of the file it sent"
+                                else "the camera sent bytes from $from instead of $have"
+                            )
+                        }
                         have = 0L                      // it sent the file from the top: take that
                     }
-                    total = range?.second ?: -1L
-                    if (total <= 0) c.contentLengthLong.let { if (it >= 0) total = have + it }
+                    if (range != null && range.total > 0) {
+                        total = range.total
+                        fileSize = true
+                    } else {
+                        c.contentLengthLong.let { if (it >= 0) total = have + it }
+                    }
                 }
                 200 -> {
                     if (have > 0) {                    // camera ignored the Range header: start this file over
@@ -421,36 +531,63 @@ object Cam {
                     total = c.contentLengthLong
                 }
                 416 -> {
-                    // Asked to continue past the end.
-                    val size = contentRange(c.getHeaderField("Content-Range"))?.second ?: -1L
-                    if (size >= 0 && size == have) return            // the phone has exactly what the camera has
-                    if (size < 0 && clip.size <= 0) return           // no size from anywhere: it can only mean "already complete"
+                    // Asked to continue past the end. That is only good news if the camera says its file is
+                    // exactly as long as what the phone has; otherwise the part on the phone cannot be trusted.
+                    val size = contentRange(c.getHeaderField("Content-Range"))?.total ?: -1L
+                    if (have > 0 && size == have) return
                     storage("reset the unfinished file") { sink.truncate(0) }
                     throw RestartException("resume point rejected, restarting this file")
                 }
                 else -> throw HttpException(code)
             }
             val expected = if (total > 0) total else if (clip.size > 0) clip.size else -1L
-            val ins = c.inputStream
+            var received = 0L
             try {
-                val buf = ByteArray(BUFFER)
-                while (true) {
-                    if (cancelled()) throw CancelledException()
-                    val n = ins.read(buf)
-                    if (n < 0) break
-                    if (n == 0) continue
-                    storage("write the file") { sink.append(buf, n) }
-                    have += n
-                    progress(have, expected)
-                }
-            } finally {
+                val ins = c.inputStream
                 try {
-                    ins.close()
-                } catch (e: Exception) {
-                    // the connection is being dropped anyway
+                    val buf = ByteArray(BUFFER)
+                    while (true) {
+                        if (cancelled()) throw CancelledException()
+                        val n = ins.read(buf)
+                        if (n < 0) break
+                        if (n == 0) continue
+                        storage("write the file") { sink.append(buf, n) }
+                        have += n
+                        received += n
+                        progress(have, expected)
+                    }
+                } finally {
+                    try {
+                        ins.close()
+                    } catch (e: Exception) {
+                        // the connection is being dropped anyway
+                    }
+                }
+            } catch (e: IOException) {
+                if (received == 0L && e !is CancelledException && e !is StorageException) {
+                    throw NoDataException("the camera answered but sent no data (${describe(e)})", e)
+                }
+                throw e
+            }
+            if (received == 0L) {
+                // The reply had no body at all.
+                val known = if (fileSize) total else clip.size
+                when {
+                    have > 0 && known > 0 && have >= known -> return        // nothing was left to send
+                    have == 0L -> throw NoDataException("the camera sent an empty file")
+                    known > 0 -> throw NoDataException("the camera sent nothing after byte $have of $known")
+                    else -> {
+                        // No size from anywhere: whether the part on the phone is the whole file cannot be told.
+                        storage("reset the unfinished file") { sink.truncate(0) }
+                        throw RestartException("cannot tell whether the part on the phone is complete, restarting this file")
+                    }
                 }
             }
-            if (have == 0L) throw IOException("the camera sent an empty file")
+            if (fileSize && have > total) {
+                // More bytes than the file is long: something was appended that does not belong to it.
+                storage("reset the unfinished file") { sink.truncate(0) }
+                throw RestartException("received $have bytes of a file the camera says has $total")
+            }
             if (expected > 0 && have < expected) throw IOException("stream ended at $have of $expected bytes")
         } finally {
             c.disconnect()

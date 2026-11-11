@@ -182,7 +182,7 @@ object Link {
                 .setNetworkSpecifier(spec)
                 .build()
             val cb = Callback(request)
-            cm(ctx).requestNetwork(req, cb, main, timeoutMs)
+            if (timeoutMs > 0) cm(ctx).requestNetwork(req, cb, main, timeoutMs) else cm(ctx).requestNetwork(req, cb, main)
             callbacks[request] = cb
         }
 

@@ -46,6 +46,7 @@ class LinkCoreTest {
         /** What "the system" currently holds. Anything left in here at the end is a leaked callback. */
         val registered = LinkedHashSet<LinkCore.Request>()
         val asked = ArrayList<LinkCore.Request>()
+        val timeouts = ArrayList<Int>()
         var releases = 0
         var fail: Exception? = null
         var onRequest: ((LinkCore.Request) -> Unit)? = null
@@ -55,6 +56,7 @@ class LinkCoreTest {
         override fun request(request: LinkCore.Request, timeoutMs: Int) {
             fail?.let { throw it }
             asked.add(request)
+            timeouts.add(timeoutMs)
             registered.add(request)
             onRequest?.invoke(request)
         }
@@ -160,7 +162,8 @@ class LinkCoreTest {
     @Test
     fun wrongPassword_userDeclines_wifiOff_allArriveAsAnEarlyNo() {
         // Android reports each of these the same way: onUnavailable() well before the time-out.
-        for (afterMs in listOf(0L, 300L, 5_000L, 20_000L)) {
+        // With the prompt on screen that can be minutes later: its own search takes 30 s and offers "Try again".
+        for (afterMs in listOf(0L, 300L, 5_000L, 20_000L, 100_000L, 170_000L)) {
             core.connect("MiVue", "12345678", false)
             timer.advance(afterMs)
             radio.systemDrops(core, radio.last)
@@ -173,15 +176,41 @@ class LinkCoreTest {
             assertEquals("no retry loop", asked, radio.asked.size)
             assertEquals(LinkState.NOT_FOUND, core.state)
         }
+        // A silent search for an exact name is short; a "no" within it is early too.
+        core.connect("MiVue_956W_1234", "12345678", true)
+        timer.advance(20_000)
+        radio.systemDrops(core, radio.last)
+        assertTrue(core.lastError!!.contains("declined"))
     }
 
     @Test
     fun timeout_firstConnection_isReportedAndNotRetried() {
-        core.connect("MiVue", "12345678", false)
+        // A known, exact name: Android searches without showing anything, so the app sets the limit (45 s).
+        core.connect("MiVue_956W_1234", "12345678", true)
+        assertEquals(45_000, radio.timeouts.last())
         timer.advance(45_000)
         radio.systemDrops(core, radio.last)
         assertEquals(LinkState.NOT_FOUND, core.state)
-        assertTrue(core.lastError!!.contains("45 s"))
+        assertTrue(core.lastError!!, core.lastError!!.contains("found within 45 s"))
+        assertNothingLeft()
+        timer.advance(30 * 60_000)
+        assertEquals(1, radio.asked.size)
+    }
+
+    @Test
+    fun androidsOwnPrompt_isNotCutShort() {
+        // The start of a name: Android shows its "choose a device" prompt, which searches for 30 seconds and
+        // then offers "Try again". The app must not end the request under it after 45 seconds.
+        core.connect("MiVue", "12345678", false)
+        assertEquals(180_000, radio.timeouts.last())
+        timer.advance(120_000)
+        assertEquals("still the user's turn", LinkState.SEARCHING, core.state)
+        assertEquals(1, radio.registered.size)
+        // Only a prompt nobody answers for three minutes is ended, so the phone does not scan for ever.
+        timer.advance(60_000)
+        radio.systemDrops(core, radio.last)
+        assertEquals(LinkState.NOT_FOUND, core.state)
+        assertTrue(core.lastError!!, core.lastError!!.contains("found within 180 s"))
         assertNothingLeft()
         timer.advance(30 * 60_000)
         assertEquals(1, radio.asked.size)
@@ -189,12 +218,19 @@ class LinkCoreTest {
 
     @Test
     fun systemNeverAnswers_theSafetyNetEndsTheSearch() {
-        core.connect("MiVue", "12345678", false)
+        core.connect("MiVue_956W_1234", "12345678", true)
         timer.advance(45_000 + LinkCore.WATCHDOG_MS - 1)
         assertEquals(LinkState.SEARCHING, core.state)
         timer.advance(1)
         assertEquals(LinkState.NOT_FOUND, core.state)
         assertEquals("the request is taken back", 1, radio.releases)
+        assertNothingLeft()
+
+        core.connect("MiVue", "12345678", false)
+        timer.advance(180_000 + LinkCore.WATCHDOG_MS - 1)
+        assertEquals(LinkState.SEARCHING, core.state)
+        timer.advance(1)
+        assertEquals(LinkState.NOT_FOUND, core.state)
         assertNothingLeft()
     }
 
@@ -344,6 +380,22 @@ class LinkCoreTest {
         core.onLost(radio.last)
         assertEquals(LinkState.LOST, core.state)
         assertEquals(1, core.retries)
+    }
+
+    @Test
+    fun differentNetworkForTheSameRequest_startsWithNoAddress() {
+        connected()
+        val r = radio.last
+        assertEquals("192.72.1.1", core.cameraIp)
+        core.onAvailable(r, "another network")
+        assertEquals(LinkState.CONNECTED, core.state)
+        assertNull("the old network's address says nothing about the new one", core.cameraIp)
+        // Even a mere guess is taken for the new network; the old one's better rank does not block it.
+        core.onAddresses(r, null, emptyList(), listOf(ip("10.9.8.7")))
+        assertEquals("10.9.8.1", core.cameraIp)
+        // The same network reported again changes nothing.
+        core.onAvailable(r, "another network")
+        assertEquals("10.9.8.1", core.cameraIp)
     }
 
     // ---------------------------------------------------------------- no leaked callbacks

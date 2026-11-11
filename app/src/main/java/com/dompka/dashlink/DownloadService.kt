@@ -58,6 +58,9 @@ class DownloadService : Service() {
         var starts = 0
             private set
 
+        /** Counts calls to start(): a pause decided before the latest one must not swallow it. */
+        private val wanted = AtomicInteger()
+
         /** One thread does all downloading and all file clean-up, in order. */
         private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "dashlink-downloads") }
 
@@ -83,6 +86,7 @@ class DownloadService : Service() {
          * does not let an app in the background start a foreground service.
          */
         fun start(ctx: Context): String? {
+            wanted.incrementAndGet()
             Jobs.paused = null
             Jobs.pausedByLink = false
             Jobs.interrupted = false
@@ -157,6 +161,13 @@ class DownloadService : Service() {
         destroyed = true
         alive = false
         dropLocks()
+        try {
+            // Android removes a foreground service's notification with the service. If it never let the
+            // service into the foreground, the progress note is an ordinary notification and would stay.
+            getSystemService(NotificationManager::class.java).cancel(NOTE_ID)
+        } catch (e: Exception) {
+            // nothing to remove
+        }
         super.onDestroy()
     }
 
@@ -191,13 +202,17 @@ class DownloadService : Service() {
             )
             while (!destroyed && Jobs.paused == null) {
                 val job = Jobs.next() ?: break
-                when (runner.run(job)) {
-                    Runner.Result.SAVED -> remember(job.clip.name)
-                    Runner.Result.PAUSED -> if (!destroyed) {
+                val asked = wanted.get()
+                val result = runner.run(job)
+                if (result == Runner.Result.SAVED) remember(job.clip.name)
+                // A pause is only declared if nobody asked for the queue to (re)start while this clip was
+                // being tried: a tap on Resume or Download at that very moment must not be lost. The
+                // clip is still queued, so the loop simply tries it again.
+                if (!destroyed && wanted.get() == asked) {
+                    if (result == Runner.Result.PAUSED) {
                         Jobs.pausedByLink = true
                         Jobs.paused = "Downloads paused: the camera is out of reach. They continue when it is connected again."
-                    }
-                    Runner.Result.STORAGE -> {
+                    } else if (result == Runner.Result.STORAGE) {
                         Jobs.pausedByLink = false
                         val free = files.freeBytes()
                         Jobs.paused = if (free < 2 * Runner.SPARE_BYTES) {
@@ -206,15 +221,22 @@ class DownloadService : Service() {
                             "Downloads paused: " + (job.lastError ?: "the phone could not store the file") + "."
                         }
                     }
-                    else -> Unit
                 }
                 Jobs.save()
             }
             tidy(files)
         } catch (t: Throwable) {
-            // Whatever it was, it must not take the whole app down. The clips stay queued.
+            // Whatever it was, it must not take the whole app down. The clips stay queued - including
+            // the one that was being worked on, which would otherwise look busy for ever.
+            for (j in Jobs.all) {
+                if (j.state == Jobs.DOWNLOADING || j.state == Jobs.WAITING || j.state == Jobs.SAVING) {
+                    j.bytesPerSec = 0
+                    j.state = Jobs.QUEUED
+                }
+            }
             Jobs.pausedByLink = false
             Jobs.paused = "Downloads stopped unexpectedly (${Cam.describe(t)})."
+            Jobs.save()
         } finally {
             dropLocks()
             try {

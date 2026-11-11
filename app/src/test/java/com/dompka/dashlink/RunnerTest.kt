@@ -26,13 +26,23 @@ class RunnerTest {
         var failOpen: String? = null
         var failPublish: String? = null
         var failWriteAt = -1L
+        var failClose = false
         var opens = 0
         var discards = 0
         var openNow = 0
         private var seq = 0
 
+        /** Addresses of files that are already finished and visible. */
+        val visible = HashSet<String>()
+
         override fun freeBytes(): Long = free
         override fun has(clip: Cam.Clip): Boolean = clip.path in already
+
+        override fun published(job: Job): Boolean {
+            if (job.dest !in visible) return false
+            job.dest = null
+            return true
+        }
 
         override fun open(job: Job): Runner.Out {
             opens++
@@ -58,6 +68,7 @@ class RunnerTest {
 
                 override fun close() {
                     openNow--
+                    if (failClose) throw IOException("close failed: EIO")
                 }
             }
         }
@@ -112,6 +123,7 @@ class RunnerTest {
         Cam.opener = Cam.Opener { throw IOException("no camera in this test") }
         Cam.downloadTimeoutMs = 15_000
         assertEquals("every file that was opened is closed again", 0, store.openNow)
+        assertTrue("something other than a read was sent: ${cam.violations.map { it.target }}", cam.violations.isEmpty())
     }
 
     private fun runner(source: Runner.Source = Runner.Source(Cam::download)) = Runner(
@@ -213,7 +225,7 @@ class RunnerTest {
     }
 
     @Test
-    fun linkBeingReestablished_isWaitedFor_howeverLongItTakes() {
+    fun linkBeingReestablished_isWaitedFor() {
         // The Wi-Fi dropped and Link is asking for it again. That has its own limit (twenty attempts); as
         // long as it is still trying, the download waits - also past the ten minutes a silent camera gets.
         var attempts = 0
@@ -244,6 +256,24 @@ class RunnerTest {
         val other = Job(Cam.Clip("/SD/Normal/F/OTHER.MP4", 1000, "", "", ""))
         assertEquals(Runner.Result.PAUSED, runner(dead).run(other))
         assertEquals(5, tries)
+    }
+
+    @Test
+    fun linkThatKeepsComingAndGoing_withoutEverDeliveringAByte_doesNotHoldTheQueueForEver() {
+        // At the edge of range: the Wi-Fi connects, drops, connects... Every reconnect gives Link a fresh set
+        // of attempts, so neither of the two limits above would ever be reached. A third one ends it.
+        var attempts = 0
+        val source = Runner.Source { _, _, _, _ ->
+            attempts++
+            clock.time += 20_000
+            link = listOf(LinkState.CONNECTED, LinkState.LOST, LinkState.SEARCHING)[attempts % 3]
+            throw IOException("dropped")
+        }
+        val job = Job(Cam.Clip(path, 1000, "", "", ""))
+        assertEquals(Runner.Result.PAUSED, runner(source).run(job))
+        assertEquals(Jobs.QUEUED, job.state)
+        val waited = clock.time - 5_000_000L
+        assertTrue("$waited", waited in Runner.STALL_MS..Runner.STALL_MS + 60_000)
     }
 
     @Test
@@ -357,6 +387,134 @@ class RunnerTest {
     }
 
     @Test
+    fun pathThisAppWillNotAskFor_failsAtOnce() {
+        // A list entry that is not a file on the card. It must not be treated like a dropped link: that would
+        // hold up every clip queued behind it, ten minutes at a time, for ever.
+        for (bad in listOf("/cgi-bin/Config.cgi?action=del&property=x", "/SD/../cgi-bin/x", "/SD/Normal/F/a?b.MP4")) {
+            val job = Job(Cam.Clip(bad, 1000, "", "", ""))
+            assertEquals(bad, Runner.Result.FAILED, runner().run(job))
+            assertEquals(Jobs.FAILED, job.state)
+            assertTrue(job.lastError!!, job.lastError!!.startsWith("RefusedException: refused"))
+        }
+        assertTrue(cam.requests.isEmpty())
+        assertEquals(0, clock.sleeps)
+        assertTrue(store.unfinished.isEmpty())
+    }
+
+    @Test
+    fun cameraThatAnswersWithNothing_failsTheClip_notTheQueue() {
+        cam.addFile("Normal", name, 1000)
+        // "200 OK" and not a single byte, every time (a zero-length file, a clip being written, a damaged entry).
+        cam.override = { if ('?' in it.target) null else FakeCam.Reply(200) }
+        val job = Job(cam.clip(path))
+        assertEquals(Runner.Result.FAILED, runner().run(job))
+        assertEquals(Jobs.FAILED, job.state)
+        assertEquals(Runner.MAX_REFUSALS + 1, cam.requests.size)
+        assertEquals("half a minute, not ten", Runner.MAX_REFUSALS, clock.sleeps)
+        assertTrue(job.lastError!!, job.lastError!!.contains("empty file"))
+        assertTrue(store.unfinished.isEmpty())
+    }
+
+    @Test
+    fun clipThatStopsAtTheSameByteEveryTime_isGivenUp() {
+        // A damaged spot on the card: the first 600 bytes arrive, then the camera has nothing more to give,
+        // however often it is asked to continue from there.
+        val data = cam.addFile("Normal", name, 1000)
+        cam.override = { req ->
+            when {
+                '?' in req.target -> null
+                req.rangeStart < 0 -> FakeCam.Reply(200, data).also {
+                    it.cutAfter = 600
+                    it.cutHard = false
+                }
+                else -> FakeCam.Reply(206).also { it.headers["Content-Range"] = "bytes ${req.rangeStart}-999/1000" }
+            }
+        }
+        val job = Job(cam.clip(path))
+        assertEquals(Runner.Result.FAILED, runner().run(job))
+        assertEquals(Jobs.FAILED, job.state)
+        assertEquals(1 + Runner.MAX_REFUSALS + 1, cam.requests.size)
+        assertTrue(job.lastError!!, job.lastError!!.contains("nothing after byte 600 of 1000"))
+        assertTrue("the useless part is not left behind", store.unfinished.isEmpty())
+    }
+
+    @Test
+    fun startingOverAfterProgress_countsAsProgressAgain() {
+        // The clip got to 900 bytes, then the part on the phone had to be thrown away. Downloading it again
+        // from the top is not "silence", even while it is still below 900: a hiccup of the link long into the
+        // second download must be waited out like any other.
+        var attempt = 0
+        val source = Runner.Source { _, sink, _, progress ->
+            attempt++
+            when (attempt) {
+                1 -> {
+                    sink.append(ByteArray(900), 900)
+                    progress(900, 1000)
+                    throw IOException("dropped")
+                }
+                2 -> {
+                    sink.truncate(0)
+                    throw Cam.RestartException("the camera sent bytes from 300 instead of 900")
+                }
+                3 -> {
+                    // A slow second download: 400 bytes over twenty minutes, then the link hiccups.
+                    repeat(4) {
+                        clock.time += 5 * 60_000
+                        sink.append(ByteArray(100), 100)
+                        progress(sink.length(), 1000)
+                    }
+                    throw IOException("dropped")
+                }
+                else -> {
+                    sink.append(ByteArray(600), 600)
+                    progress(1000, 1000)
+                }
+            }
+        }
+        val job = Job(Cam.Clip(path, 1000, "", "", ""))
+        assertEquals(Runner.Result.SAVED, runner(source).run(job))
+        assertEquals(4, attempt)
+        assertEquals(1000, store.published[name]!!.size)
+    }
+
+    @Test
+    fun cameraThatCannotResume_onALinkThatKeepsDropping_isGivenUp() {
+        // Every attempt gets a bit of the file and is cut; every resume is answered with the whole file from
+        // the top again. Bytes keep flowing, the clip never finishes. Not for ever.
+        cam.addFile("Normal", name, 500_000)
+        cam.supportsRange = false
+        cam.tweak = { req, reply ->
+            if ('?' !in req.target) {
+                reply.cutAfter = 100_000
+                reply.cutHard = false
+            }
+        }
+        val job = Job(cam.clip(path))
+        assertEquals(Runner.Result.FAILED, runner().run(job))
+        assertEquals(Jobs.FAILED, job.state)
+        assertTrue(job.lastError!!, job.lastError!!.startsWith("started over ${Runner.MAX_RESTARTS + 1} times"))
+        assertEquals("one first try and four that started over", Runner.MAX_RESTARTS + 2, fileRequests())
+        assertTrue(store.unfinished.isEmpty())
+    }
+
+    @Test
+    fun cameraThatCannotResume_butGetsThroughInOneGo_isFine() {
+        val data = cam.addFile("Normal", name, 300_000)
+        cam.supportsRange = false
+        var cuts = 2
+        cam.tweak = { req, reply ->
+            if ('?' !in req.target && cuts-- > 0) {
+                reply.cutAfter = 100_000
+                reply.cutHard = false
+            }
+        }
+        val job = Job(cam.clip(path))
+        assertEquals(Runner.Result.SAVED, runner().run(job))
+        assertArrayEquals(data, store.published[name])
+        assertEquals(3, fileRequests())
+    }
+
+    @Test
     fun listedSizeDoesNotMatchTheFile_isSavedOnce() {
         // Version 0.1 trusted the size in the list: "stream ended at 800 of 1000", ask to resume, 416,
         // delete, download again... for ever. The transfer is believed now.
@@ -432,6 +590,36 @@ class RunnerTest {
         assertEquals(Runner.Result.SAVED, runner().run(job))
         assertArrayEquals(data, store.published[name])
         assertEquals("the finished part was simply published", 1, fileRequests())
+    }
+
+    @Test
+    fun writingCannotBeFinished_isAStorageProblem_notALinkProblem() {
+        cam.addFile("Normal", name, 1000)
+        store.failClose = true
+        val job = Job(cam.clip(path))
+        assertEquals(Runner.Result.STORAGE, runner().run(job))
+        assertEquals(Jobs.QUEUED, job.state)
+        assertTrue(job.lastError!!, job.lastError!!.contains("could not finish writing"))
+        assertEquals(1, fileRequests())
+        assertEquals(0, clock.sleeps)
+        store.failClose = false
+        store.openNow = 0
+    }
+
+    @Test
+    fun publishedJustBeforeTheAppWasKilled_isNeitherFetchedNorDeletedAgain() {
+        // The clip was finished and made visible, and Android killed the app before it could write that down.
+        // The restored job still points at the file. It is done - and the finished file must not be touched.
+        cam.addFile("Normal", name, 1000)
+        val job = Job(cam.clip(path))
+        job.dest = "content://media/external_primary/video/media/77"
+        store.visible.add(job.dest!!)
+        assertEquals(Runner.Result.SAVED, runner().run(job))
+        assertEquals(Jobs.SAVED, job.state)
+        assertNull(job.dest)
+        assertTrue("not downloaded again", cam.requests.isEmpty())
+        assertEquals("not deleted", 0, store.discards)
+        assertEquals(0, store.opens)
     }
 
     // ---------------------------------------------------------------- Stop
