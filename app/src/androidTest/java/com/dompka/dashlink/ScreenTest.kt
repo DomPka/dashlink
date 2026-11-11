@@ -91,7 +91,7 @@ class ScreenTest {
         val names = listOf(name("A"), name("B"), name("C"))
         for ((i, n) in names.withIndex()) cam.addFile("Normal", n, 2000, "2026-03-01 10:0$i:00")
         Kit.connectThroughUi()
-        Kit.until("the list to be loaded") { Kit.text("progress").contains("Normal: 3 files") }
+        Kit.until("the list to be loaded") { Kit.text("note").contains("Normal: 3 files") }
         row(names[0]).click()
         row(names[1]).click()
         Kit.until("two rows to be ticked") { isTicked(names[0]) && isTicked(names[1]) && !isTicked(names[2]) }
@@ -114,7 +114,7 @@ class ScreenTest {
             assertTrue("it really is a new screen", first !== second)
 
             Kit.until("the status to be back") { Kit.text("status").contains("MiVue_Test at 192.72.1.1") }
-            assertTrue(Kit.text("progress").contains("Normal: 3 files"))
+            assertTrue(Kit.text("note").contains("Normal: 3 files"))
             assertTrue("ticks survive", isTicked(names[0]) && isTicked(names[1]) && !isTicked(names[2]))
             assertEquals("DISCONNECT", Kit.text("connect").uppercase())
             SystemClock.sleep(1500)
@@ -144,7 +144,7 @@ class ScreenTest {
             // Then something makes Android rebuild the screen from the picture it saved (here: a new font size).
             Kit.shell("settings put system font_scale 1.15")
             Kit.ctx.startActivity(Intent(Kit.ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            Kit.until("the rebuilt screen") { Kit.text("progress").contains("Normal: 4 files") }
+            Kit.until("the rebuilt screen") { Kit.text("note").contains("Normal: 4 files") }
             SystemClock.sleep(1000)
             // The ticks must be where the user put them, not on the rows that used to be second and third.
             assertTrue("A", isTicked(names[0]))
@@ -171,7 +171,7 @@ class ScreenTest {
         }
         Kit.launch().use { scenario ->
             Kit.connectThroughUi()
-            Kit.until("the list to be loaded") { Kit.text("progress").contains("Normal: 1 files") }
+            Kit.until("the list to be loaded") { Kit.text("note").contains("Normal: 1 files") }
             row(a).click()
             Kit.tap("download")
             Kit.until("the download to be under way") { (Jobs.all.firstOrNull()?.done ?: 0) > 100_000 }
@@ -208,7 +208,7 @@ class ScreenTest {
                 step()
                 SystemClock.sleep(1200)
                 Kit.until("step $i: the screen to be there") { Kit.text("status").contains("MiVue_Test at 192.72.1.1") }
-                assertTrue("step $i: list", Kit.text("progress").contains("Normal: 3 files"))
+                assertTrue("step $i: list", Kit.text("note").contains("Normal: 3 files"))
                 assertEquals("step $i: ticks", setOf(names[0], names[1]), ticked())
                 // Whatever the shape of the screen, the list and the buttons that act on it are on it.
                 for (id in listOf("list", "download", "stop", "diag")) Kit.view(id, 5000)

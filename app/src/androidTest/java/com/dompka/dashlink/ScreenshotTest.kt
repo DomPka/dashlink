@@ -75,7 +75,7 @@ class ScreenshotTest {
 
     private fun connectedWithList() {
         Kit.connectThroughUi()
-        Kit.until("the list to be loaded") { Kit.text("progress").contains("Normal: 9 files") }
+        Kit.until("the list to be loaded") { Kit.text("note").contains("Normal: 9 files") }
     }
 
     @Test

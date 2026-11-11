@@ -3,6 +3,7 @@
 <resources>
     <item name="status" type="id" />
     <item name="notice" type="id" />
+    <item name="note" type="id" />
     <item name="notice_action" type="id" />
     <item name="ssid" type="id" />
     <item name="pass" type="id" />

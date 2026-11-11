@@ -81,6 +81,7 @@ class MainActivity : Activity() {
     private lateinit var list: ListView
     private lateinit var emptyTitle: TextView
     private lateinit var emptyText: TextView
+    private lateinit var noteView: TextView
     private lateinit var progress: TextView
     private lateinit var bar: ProgressBar
     private lateinit var downloadBtn: Button
@@ -211,6 +212,13 @@ class MainActivity : Activity() {
         colB = LinearLayout(this)
         colB.orientation = LinearLayout.VERTICAL
         colB.addView(buildFolderBar(), LinearLayout.LayoutParams(match, wrap))
+        noteView = TextView(this)
+        noteView.id = R.id.note
+        noteView.textSize = 12f
+        noteView.setTextColor(getColor(R.color.text_dim))
+        noteView.setPadding(dp(8), 0, dp(8), dp(6))
+        noteView.visibility = View.GONE
+        colB.addView(noteView, LinearLayout.LayoutParams(match, wrap))
         colB.addView(buildList(), LinearLayout.LayoutParams(match, 0, 1f))
 
         bottom = buildDownloadPanel()
@@ -288,23 +296,20 @@ class MainActivity : Activity() {
     private fun buildHeading(): View {
         val row = LinearLayout(this)
         row.gravity = Gravity.CENTER_VERTICAL
-        row.setPadding(dp(6), dp(6), dp(4), dp(10))
+        row.setPadding(dp(6), dp(4), 0, dp(8))
         val title = TextView(this)
         title.text = "DashLink"
         title.textSize = 24f
         title.typeface = medium
         title.setTextColor(getColor(R.color.text))
-        spinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall)
-        spinner.indeterminateTintList = tint(R.color.accent)
-        spinner.visibility = View.GONE
-        pill = TextView(this)
-        pill.textSize = 12f
-        pill.typeface = medium
-        pill.setPadding(dp(10), dp(4), dp(10), dp(4))
-        pill.background = getDrawable(R.drawable.bg_pill)
+        // Always within reach, whatever state the rest is in: this is what gets tapped when something is wrong.
+        val diag = Button(this)
+        diag.id = R.id.diag
+        diag.text = "Diagnostics"
+        style(diag, FLAT)
+        diag.setOnClickListener { diagnostics() }
         row.addView(title, LinearLayout.LayoutParams(0, wrap, 1f))
-        row.addView(spinner, LinearLayout.LayoutParams(dp(18), dp(18)).apply { marginEnd = dp(8) })
-        row.addView(pill, LinearLayout.LayoutParams(wrap, wrap))
+        row.addView(diag, LinearLayout.LayoutParams(wrap, dp(40)))
         return row
     }
 
@@ -322,6 +327,21 @@ class MainActivity : Activity() {
 
     private fun buildLinkCard(): View {
         val card = card()
+        // The state of the link in a word, and a turning wheel while it is being looked for.
+        val state = LinearLayout(this)
+        state.gravity = Gravity.CENTER_VERTICAL
+        pill = TextView(this)
+        pill.textSize = 12f
+        pill.typeface = medium
+        pill.setPadding(dp(10), dp(3), dp(10), dp(3))
+        pill.background = getDrawable(R.drawable.bg_pill)
+        spinner = ProgressBar(this, null, android.R.attr.progressBarStyleSmall)
+        spinner.indeterminateTintList = tint(R.color.accent)
+        spinner.visibility = View.GONE
+        state.addView(pill, LinearLayout.LayoutParams(wrap, wrap))
+        state.addView(spinner, LinearLayout.LayoutParams(dp(16), dp(16)).apply { marginStart = dp(8) })
+        card.addView(state, LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(8) })
+
         status = TextView(this)
         status.id = R.id.status
         status.textSize = 13f
@@ -381,7 +401,7 @@ class MainActivity : Activity() {
         c.textSize = 14f
         c.typeface = medium
         c.gravity = Gravity.CENTER
-        c.setPadding(dp(16), 0, dp(16), 0)
+        c.setPadding(dp(14), 0, dp(14), 0)
         c.background = getDrawable(R.drawable.chip)
         c.setTextColor(getColorStateList(R.color.chip_text))
         c.isClickable = true
@@ -395,6 +415,8 @@ class MainActivity : Activity() {
         row.setPadding(dp(2), dp(10), 0, dp(8))
         val scroll = HorizontalScrollView(this)
         scroll.isHorizontalScrollBarEnabled = false
+        scroll.isHorizontalFadingEdgeEnabled = true     // a folder that does not fit fades out instead of being cut
+        scroll.setFadingEdgeLength(dp(24))
         folderBar = LinearLayout(this)
         scroll.addView(folderBar, ViewGroup.LayoutParams(wrap, wrap))
         rearChip = chip("Rear cam")
@@ -456,6 +478,7 @@ class MainActivity : Activity() {
         list.selector = ColorDrawable(Color.TRANSPARENT)
         list.clipToPadding = false
         list.setPadding(dp(2), 0, dp(2), dp(4))
+        list.isVerticalScrollBarEnabled = false
         list.isFastScrollEnabled = true                 // a handle to drag once there are screens full of clips
         list.adapter = clipAdapter
         list.setOnItemClickListener { _, _, position, _ ->
@@ -493,22 +516,15 @@ class MainActivity : Activity() {
     private fun buildDownloadPanel(): LinearLayout {
         val card = card()
         card.elevation = dp(3).toFloat()
-        card.setPadding(dp(16), dp(8), dp(12), dp(12))
 
-        val head = LinearLayout(this)
+        // Only there while there is something to say about downloads.
         progress = TextView(this)
         progress.id = R.id.progress
         progress.textSize = 13f
         progress.setTextColor(getColor(R.color.text_dim))
         progress.setLineSpacing(dp(2).toFloat(), 1f)
-        val diag = Button(this)
-        diag.id = R.id.diag
-        diag.text = "Diagnostics"
-        style(diag, FLAT)
-        diag.setOnClickListener { diagnostics() }
-        head.addView(progress, LinearLayout.LayoutParams(0, wrap, 1f).apply { topMargin = dp(8) })
-        head.addView(diag, LinearLayout.LayoutParams(wrap, dp(36)))
-        card.addView(head, LinearLayout.LayoutParams(match, wrap))
+        progress.visibility = View.GONE
+        card.addView(progress, LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(10) })
 
         bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
         bar.progressDrawable = getDrawable(R.drawable.progress)
@@ -516,15 +532,14 @@ class MainActivity : Activity() {
         bar.minHeight = dp(6)
         bar.maxHeight = dp(6)
         bar.visibility = View.GONE
-        card.addView(bar, LinearLayout.LayoutParams(match, dp(6)).apply {
-            topMargin = dp(8)
-            marginEnd = dp(4)
-        })
+        card.addView(bar, LinearLayout.LayoutParams(match, dp(6)).apply { bottomMargin = dp(12) })
 
         val buttons = LinearLayout(this)
         downloadBtn = Button(this)
         downloadBtn.id = R.id.download
         downloadBtn.text = "Download selected"
+        downloadBtn.maxLines = 1
+        downloadBtn.ellipsize = TextUtils.TruncateAt.END
         style(downloadBtn, FILLED)
         downloadBtn.setOnClickListener { downloadSelected() }
         val stop = Button(this)
@@ -538,17 +553,14 @@ class MainActivity : Activity() {
         }
         buttons.addView(downloadBtn, LinearLayout.LayoutParams(0, dp(46), 1f))
         buttons.addView(stop, LinearLayout.LayoutParams(wrap, dp(46)).apply { marginStart = dp(8) })
-        card.addView(buttons, LinearLayout.LayoutParams(match, wrap).apply {
-            topMargin = dp(12)
-            marginEnd = dp(4)
-        })
+        card.addView(buttons, LinearLayout.LayoutParams(match, wrap))
         return card
     }
 
     /** How many clips are ticked, on the button that acts on them. */
     private fun showSelection() {
         val n = Browser.ticked.size
-        show(downloadBtn, if (n > 0) "Download $n selected" else "Download selected")
+        show(downloadBtn, if (n == 0) "Download selected" else if (n == 1) "Download 1 clip" else "Download $n clips")
     }
 
     /** A ScrollView that takes at most [share] of the height on offer and scrolls the rest; all of it at 1. */
@@ -759,9 +771,14 @@ class MainActivity : Activity() {
                 if (c.path in Browser.ticked) list.setItemChecked(i, true)
             }
         }
+        // What the list is showing - or, while it is empty, why.
         if (Browser.clips.isEmpty()) {
             show(emptyTitle, if (Link.ready) "No clips here" else "No camera connected")
             show(emptyText, if (Link.ready) Browser.note else "Connect to the camera to see its clips.")
+            if (noteView.visibility != View.GONE) noteView.visibility = View.GONE
+        } else {
+            show(noteView, Browser.note)
+            if (noteView.visibility != View.VISIBLE) noteView.visibility = View.VISIBLE
         }
         showSelection()
         renderNotice()
@@ -969,23 +986,20 @@ class MainActivity : Activity() {
         val active = jobs.firstOrNull {
             it.state == Jobs.DOWNLOADING || it.state == Jobs.WAITING || it.state == Jobs.SAVING
         }
-        val sb = StringBuilder(Browser.note)
-        var boldFrom = -1
-        var boldTo = -1
+        val sb = StringBuilder()
+        var nameEnd = 0
         if (active != null) {
             val rate = String.format(Locale.US, "%.1f", active.bytesPerSec / 1048576.0)
-            sb.append("\n")
-            boldFrom = sb.length
-            sb.append(active.clip.name).append("  ")
-                .append(DownloadService.mb(active.done)).append("/").append(DownloadService.mb(active.total))
-                .append(" MB  ").append(rate).append(" MB/s  — ").append(active.state)
-            boldTo = sb.length
+            sb.append(active.clip.name)
+            nameEnd = sb.length
+            sb.append("\n").append(DownloadService.mb(active.done)).append("/").append(DownloadService.mb(active.total))
+                .append(" MB  ·  ").append(rate).append(" MB/s  ·  ").append(active.state).append("\n")
         }
         val queued = jobs.count { it.state == Jobs.QUEUED && !it.cancel }
         val done = jobs.count { it.state == Jobs.SAVED }
         val failed = jobs.count { it.state == Jobs.FAILED }
         if (jobs.isNotEmpty()) {
-            sb.append("\n").append(queued).append(" queued, ").append(done).append(" saved")
+            sb.append(queued).append(" queued, ").append(done).append(" saved")
             if (failed > 0) {
                 sb.append(", ").append(failed).append(" failed")
                 jobs.lastOrNull { it.state == Jobs.FAILED }?.lastError?.let { sb.append(" (").append(it).append(")") }
@@ -994,12 +1008,15 @@ class MainActivity : Activity() {
         val text = sb.toString()
         if (progress.text.toString() != text) {
             val styled = SpannableString(text)
-            if (boldFrom >= 0) {
-                styled.setSpan(ForegroundColorSpan(getColor(R.color.text)), boldFrom, boldTo, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                styled.setSpan(TypefaceSpan("sans-serif-medium"), boldFrom, boldTo, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (nameEnd > 0) {
+                styled.setSpan(ForegroundColorSpan(getColor(R.color.text)), 0, nameEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                styled.setSpan(TypefaceSpan("sans-serif-medium"), 0, nameEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                styled.setSpan(AbsoluteSizeSpan(14, true), 0, nameEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
             progress.text = styled
         }
+        val wantText = if (text.isEmpty()) View.GONE else View.VISIBLE
+        if (progress.visibility != wantText) progress.visibility = wantText
 
         // How far the current clip is, as a bar. Hidden when nothing is on its way or its size is not known.
         val total = active?.total ?: 0L

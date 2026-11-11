@@ -148,7 +148,7 @@ class DownloadTest {
             Kit.until("the camera's full name to be kept instead of the typed start of it") {
                 Kit.ctx.getSharedPreferences("dashlink", Context.MODE_PRIVATE).getString("ssid", null) == "MiVue_Test"
             }
-            Kit.until("the list to be loaded") { Kit.text("progress").contains("Normal: 3 files") }
+            Kit.until("the list to be loaded") { Kit.text("note").contains("Normal: 3 files") }
 
             Kit.tapText(".*${Regex.escape(a)}.*")
             Kit.tapText(".*${Regex.escape(b)}.*")
