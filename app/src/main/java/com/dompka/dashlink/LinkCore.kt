@@ -137,7 +137,7 @@ internal class LinkCore(
 
     /** [name] as Android reports it: possibly quoted, possibly hidden because the location permission is missing. */
     fun onSsid(r: Request, name: String?) {
-        if (r !== active) return
+        if (r !== active || network == null) return
         val clean = name?.trim()?.trim('"') ?: return
         if (clean.isEmpty() || clean == UNKNOWN_SSID || clean == cameraSsid) return
         cameraSsid = clean
@@ -147,7 +147,7 @@ internal class LinkCore(
     }
 
     fun onAddresses(r: Request, dhcpServer: InetAddress?, gateways: List<InetAddress>, own: List<InetAddress>) {
-        if (r !== active) return
+        if (r !== active || network == null) return
         val pick = pickCameraIp(dhcpServer, gateways, own) ?: return
         // A later update with less information must not replace a better answer with a guess.
         if (pick.rank < ipRank) return

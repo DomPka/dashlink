@@ -3,7 +3,7 @@ package com.dompka.dashlink
 /** Text rules for the diagnostics report. Plain Kotlin, so DiagTest can hold them to their word. */
 object Diag {
     /** A line containing any of these is about a key or password and is left out entirely. */
-    private val secretWords = listOf("crypto", "passw", "psk", "pwd", "wpa", "secret", "key=")
+    private val secretWords = listOf("crypto", "pass", "psk", "pwd", "wpa", "secret", "key=")
 
     /**
      * Never put the camera's Wi-Fi password in a report: drops every line that looks like it holds

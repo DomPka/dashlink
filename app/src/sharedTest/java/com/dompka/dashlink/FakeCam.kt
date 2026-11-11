@@ -15,6 +15,7 @@ import java.net.URL
 import java.util.Random
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -26,7 +27,25 @@ import java.util.concurrent.atomic.AtomicInteger
 class FakeCam : Closeable {
 
     class Request(val method: String, val target: String, val headers: Map<String, String>) {
-        val path: String get() = target.substringBefore('?')
+        /** The path as the client meant it, with %XX escapes resolved. */
+        val path: String
+            get() {
+                val raw = target.substringBefore('?')
+                if ('%' !in raw) return raw
+                val out = ByteArrayOutputStream()
+                var i = 0
+                while (i < raw.length) {
+                    val hex = if (raw[i] == '%' && i + 2 < raw.length) raw.substring(i + 1, i + 3).toIntOrNull(16) else null
+                    if (hex != null) {
+                        out.write(hex)
+                        i += 3
+                    } else {
+                        out.write(raw[i].code)
+                        i++
+                    }
+                }
+                return out.toString("UTF-8")
+            }
         val query: Map<String, String>
             get() {
                 val out = LinkedHashMap<String, String>()
@@ -51,6 +70,9 @@ class FakeCam : Closeable {
 
         /** Drop the connection after this many body bytes; -1 sends everything. */
         var cutAfter = -1
+
+        /** How the cut looks to the phone: true = connection reset, false = the stream just ends early. */
+        var cutHard = true
 
         /** Wait this long before answering at all. */
         var stallMs = 0L
@@ -172,11 +194,15 @@ class FakeCam : Closeable {
             requests.add(req)
             val now = active.incrementAndGet()
             synchronized(this) { if (now > maxActive) maxActive = now }
+            // The request counts as "in progress" until the moment its last bytes go out: from then on the
+            // phone may rightly start the next one, so only a real overlap ever makes maxActive exceed 1.
+            val done = AtomicBoolean()
+            val finished = { if (done.compareAndSet(false, true)) active.decrementAndGet() }
             try {
                 val reply = override?.invoke(req) ?: normal(req).also { tweak?.invoke(req, it) }
-                send(s, reply)
+                send(s, reply, finished)
             } finally {
-                active.decrementAndGet()
+                finished()
             }
         } catch (e: Exception) {
             // the client went away; nothing to do
@@ -267,25 +293,27 @@ class FakeCam : Closeable {
         else -> "Status"
     }
 
-    private fun send(s: Socket, r: Reply) {
+    private fun send(s: Socket, r: Reply, lastBytes: () -> Unit) {
         if (r.stallMs > 0) Thread.sleep(r.stallMs)
         val out = s.getOutputStream()
         val head = StringBuilder("HTTP/1.1 ${r.status} ${reason(r.status)}\r\n")
         for ((k, v) in r.headers) head.append(k).append(": ").append(v).append("\r\n")
         if (r.sendLength) head.append("Content-Length: ").append(r.body.size).append("\r\n")
         head.append("Connection: close\r\n\r\n")
+        val limit = if (r.cutAfter >= 0) minOf(r.cutAfter, r.body.size) else r.body.size
+        if (limit == 0) lastBytes()
         out.write(head.toString().toByteArray(Charsets.ISO_8859_1))
         out.flush()
-        val limit = if (r.cutAfter >= 0) minOf(r.cutAfter, r.body.size) else r.body.size
         var sent = 0
         while (sent < limit) {
             val n = minOf(r.chunk, limit - sent)
+            if (sent + n >= limit) lastBytes()
             out.write(r.body, sent, n)
             out.flush()
             sent += n
-            if (r.chunkDelayMs > 0) Thread.sleep(r.chunkDelayMs)
+            if (r.chunkDelayMs > 0 && sent < limit) Thread.sleep(r.chunkDelayMs)
         }
-        if (r.cutAfter >= 0 && r.cutAfter < r.body.size) {
+        if (r.cutAfter >= 0 && r.cutAfter < r.body.size && r.cutHard) {
             s.setSoLinger(true, 0)      // drop the connection the hard way, like a link that vanished
         }
     }
