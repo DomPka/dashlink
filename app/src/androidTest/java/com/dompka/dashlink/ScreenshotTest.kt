@@ -109,6 +109,11 @@ class ScreenshotTest {
         Kit.launch().use {
             connectedWithList()
             shot("3-clips")
+            // "Select all" ticks the lot, and once more unticks it.
+            Kit.tap("select_all")
+            Kit.until("every clip to be ticked") { Kit.text("download") == "Download 9 clips" && Kit.text("select_all") == "Select none" }
+            Kit.tap("select_all")
+            Kit.until("no clip to be ticked") { Kit.text("download") == "Download selected" && Kit.text("select_all") == "Select all" }
             Kit.tapText(".*${Regex.escape(name(8))}.*")
             Kit.tapText(".*${Regex.escape(name(7))}.*")
             shot("4-two-ticked")

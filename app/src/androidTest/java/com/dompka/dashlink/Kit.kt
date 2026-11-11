@@ -303,6 +303,16 @@ internal object Kit {
 
     fun permissionDialogShowing(): Boolean = device.findObject(permissionButtons) != null
 
+    /** The list row that shows [namePart]: the smallest thing around that text which also holds a tick box. */
+    fun clipRow(namePart: String): UiObject2? {
+        var node = device.findObject(By.text(Pattern.compile(".*" + Pattern.quote(namePart) + ".*", Pattern.DOTALL))) ?: return null
+        repeat(4) {
+            node = node.parent ?: return null
+            if (node.findObject(By.checkable(true)) != null) return node
+        }
+        return null
+    }
+
     /**
      * When the app ends a search while Android's Wi-Fi prompt is up (a time-out, or disconnecting),
      * Android replaces the prompt with a box saying the application has cancelled the request, and

@@ -82,6 +82,8 @@ class MainActivity : Activity() {
     private lateinit var emptyTitle: TextView
     private lateinit var emptyText: TextView
     private lateinit var noteView: TextView
+    private lateinit var noteRow: LinearLayout
+    private lateinit var allBtn: Button
     private lateinit var progress: TextView
     private lateinit var bar: ProgressBar
     private lateinit var downloadBtn: Button
@@ -212,13 +214,23 @@ class MainActivity : Activity() {
         colB = LinearLayout(this)
         colB.orientation = LinearLayout.VERTICAL
         colB.addView(buildFolderBar(), LinearLayout.LayoutParams(match, wrap))
+        // What the list is showing, and a way to tick all of it at once.
+        noteRow = LinearLayout(this)
+        noteRow.gravity = Gravity.CENTER_VERTICAL
+        noteRow.visibility = View.GONE
         noteView = TextView(this)
         noteView.id = R.id.note
         noteView.textSize = 12f
         noteView.setTextColor(getColor(R.color.text_dim))
-        noteView.setPadding(dp(8), 0, dp(8), dp(6))
-        noteView.visibility = View.GONE
-        colB.addView(noteView, LinearLayout.LayoutParams(match, wrap))
+        noteView.setPadding(dp(8), 0, dp(8), 0)
+        allBtn = Button(this)
+        allBtn.id = R.id.select_all
+        style(allBtn, FLAT)
+        allBtn.textSize = 13f
+        allBtn.setOnClickListener { tickAll() }
+        noteRow.addView(noteView, LinearLayout.LayoutParams(0, wrap, 1f))
+        noteRow.addView(allBtn, LinearLayout.LayoutParams(wrap, dp(32)))
+        colB.addView(noteRow, LinearLayout.LayoutParams(match, wrap).apply { bottomMargin = dp(4) })
         colB.addView(buildList(), LinearLayout.LayoutParams(match, 0, 1f))
 
         bottom = buildDownloadPanel()
@@ -557,9 +569,22 @@ class MainActivity : Activity() {
         return card
     }
 
+    /** Ticks every clip in the list, or none if all of them are ticked already. */
+    private fun tickAll() {
+        val clips = Browser.clips
+        val all = clips.isNotEmpty() && Browser.ticked.size >= clips.size
+        Browser.ticked.clear()
+        if (!all) for (c in clips) Browser.ticked.add(c.path)
+        list.clearChoices()
+        if (!all) for (i in clips.indices) list.setItemChecked(i, true)
+        clipAdapter.notifyDataSetChanged()
+        showSelection()
+    }
+
     /** How many clips are ticked, on the button that acts on them. */
     private fun showSelection() {
         val n = Browser.ticked.size
+        show(allBtn, if (n > 0 && n >= Browser.clips.size) "Select none" else "Select all")
         show(downloadBtn, if (n == 0) "Download selected" else if (n == 1) "Download 1 clip" else "Download $n clips")
     }
 
@@ -775,10 +800,10 @@ class MainActivity : Activity() {
         if (Browser.clips.isEmpty()) {
             show(emptyTitle, if (Link.ready) "No clips here" else "No camera connected")
             show(emptyText, if (Link.ready) Browser.note else "Connect to the camera to see its clips.")
-            if (noteView.visibility != View.GONE) noteView.visibility = View.GONE
+            if (noteRow.visibility != View.GONE) noteRow.visibility = View.GONE
         } else {
             show(noteView, Browser.note)
-            if (noteView.visibility != View.VISIBLE) noteView.visibility = View.VISIBLE
+            if (noteRow.visibility != View.VISIBLE) noteRow.visibility = View.VISIBLE
         }
         showSelection()
         renderNotice()

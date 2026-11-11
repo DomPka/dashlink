@@ -161,7 +161,9 @@ class DownloadTest {
             assertEquals("nothing unfinished is left", 0, Kit.stored(tag).count { it.pending })
             assertEquals("the third clip was not ticked", 2, Kit.stored(tag).size)
             assertServiceGone()
-            Kit.until("the list to mark them as saved") { Kit.find(".*${Regex.escape(a)}.*✓ saved.*") != null }
+            Kit.until("the list to mark them as saved") {
+                Kit.clipRow(a)?.findObject(By.text("Saved")) != null && Kit.clipRow(b)?.findObject(By.text("Saved")) != null
+            }
             assertTrue(Kit.text("progress").contains("0 queued, 2 saved"))
             assertEquals("the camera was never asked two things at once", 1, cam.maxActive)
         }
