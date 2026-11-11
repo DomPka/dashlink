@@ -45,6 +45,7 @@ Things the app will ask for, and why:
 
 - **Location (precise)** — Android only tells an app the name of a Wi-Fi network with this permission. Without
   it the camera has to be picked from Android's prompt every time and the link cannot reconnect by itself.
+  The same goes for a phone on which Location is switched off altogether.
 - **Nearby devices**, **Notifications** — the link to the camera, and the progress notification.
 - **Unrestricted battery use** — asked on the first download. Without it Android (Samsung in particular) may
   stop long downloads while the screen is off. If that happens, the app says so the next time it is opened.
