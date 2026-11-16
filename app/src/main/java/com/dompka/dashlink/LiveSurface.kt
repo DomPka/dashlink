@@ -97,6 +97,8 @@ internal class LiveSurface(context: Context) : FrameLayout(context) {
                 surfaceTexture = null
                 shown = false
                 token++
+                // Still wanted: it starts again with the next surface, and says so meanwhile rather than "playing".
+                if (wanted) deliver(Live.Status(Live.Phase.STARTING, "waiting for the picture surface"))
                 // The decoder must let go of the surface before it is released, or it dies writing into nothing.
                 // It notices within one frame or one poll of the camera; it is not waited for longer than that.
                 val until = SystemClock.uptimeMillis() + RELEASE_WAIT_MS

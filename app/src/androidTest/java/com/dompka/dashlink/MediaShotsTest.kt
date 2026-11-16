@@ -139,7 +139,7 @@ class MediaShotsTest {
     private fun savedClip(): Cam.Clip {
         val name = "FILE260301-100800F.MP4"
         Kit.ctx.getSharedPreferences("dashlink", Context.MODE_PRIVATE).edit().putStringSet("saved", setOf(name)).commit()
-        return rig.clip("Normal", name, TestVideo.mp4(12, 960, 540, 25), "2026-03-01 10:08:00", res = "960x540", secs = "12")
+        return rig.clip("Normal", name, TestVideo.mp4(8, 960, 540, 25), "2026-03-01 10:08:00", res = "960x540", secs = "8")
     }
 
     private fun playerShot(name: String, clip: Cam.Clip) {

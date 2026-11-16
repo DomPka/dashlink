@@ -216,6 +216,13 @@ class LiveActivity : Activity() {
         lower = FrameLayout(this)
         column.addView(lower, LinearLayout.LayoutParams(match, 0, 1f))
         root.addView(column, FrameLayout.LayoutParams(match, match))
+        val hint = TextView(dark)
+        hint.text = "Turn the phone sideways for the full picture."
+        Type.caption(hint, t.text3)
+        hint.gravity = Gravity.CENTER
+        lower.addView(hint, FrameLayout.LayoutParams(wrap, wrap, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            setMargins(dpi(24f), 0, dpi(24f), dpi(28f))
+        })
 
         // Over the picture itself: a dimming veil for the state cards, and the date stamp at the bottom start.
         dim = View(this)
