@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Names for the views of the live viewer and the clip player (built in code), so tests and accessibility can find them. -->
+<resources>
+    <!-- LiveSurface -->
+    <item name="live_texture" type="id" />
+
+    <!-- LiveActivity -->
+    <item name="live_surface" type="id" />
+    <item name="live_close" type="id" />
+    <item name="live_chip" type="id" />
+    <item name="live_readout" type="id" />
+    <item name="live_stamp" type="id" />
+    <item name="live_info" type="id" />
+    <item name="live_card" type="id" />
+    <item name="live_card_title" type="id" />
+    <item name="live_card_detail" type="id" />
+    <item name="live_retry" type="id" />
+    <item name="live_card_close" type="id" />
+
+    <!-- PlayerActivity -->
+    <item name="player_back" type="id" />
+    <item name="player_title" type="id" />
+    <item name="player_video" type="id" />
+    <item name="player_photo" type="id" />
+    <item name="player_seek" type="id" />
+    <item name="player_elapsed" type="id" />
+    <item name="player_total" type="id" />
+    <item name="player_play" type="id" />
+    <item name="player_back10" type="id" />
+    <item name="player_fwd10" type="id" />
+    <item name="player_error" type="id" />
+    <item name="player_error_detail" type="id" />
+    <item name="player_busy" type="id" />
+    <item name="player_busy_detail" type="id" />
+    <item name="player_download" type="id" />
+    <item name="player_stop" type="id" />
+    <item name="player_progress" type="id" />
+    <item name="player_saved" type="id" />
+    <item name="player_saved_note" type="id" />
+
+    <!-- Thumbs: the tag that says which clip an ImageView is showing -->
+    <item name="thumb_key" type="id" />
+</resources>
