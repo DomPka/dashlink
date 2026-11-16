@@ -122,6 +122,15 @@ internal class RemoteFile(val path: String, knownSize: Long, private val sequent
     /** The camera answered a ranged request with the whole file (200): nothing but byte 0 can be asked for. */
     private var noSeek = false
 
+    /**
+     * A block a reply ended short of, honestly (its Content-Range ended there: some servers cap a reply's size),
+     * waiting for the rest from a follow-up request. Reader thread only. Never in the cache while partial, since
+     * a read must never get 0 bytes.
+     */
+    private class Partial(val start: Long, val data: ByteArray, val filled: Int)
+
+    private var partial: Partial? = null
+
     /** [version] when the reader last decided what to do. */
     private var seen = 0L
 
@@ -389,11 +398,14 @@ internal class RemoteFile(val path: String, knownSize: Long, private val sequent
      * before [block].
      */
     private fun open(block: Long): Boolean {
-        val start = block * blockSize
+        val blockStart = block * blockSize
+        val carried = partial?.takeIf { it.start == blockStart }
+        if (carried == null) partial = null
+        val start = if (carried != null) blockStart + carried.filled else blockStart
         if (noSeek && start > 0) throw CannotSeekException()
-        val toTail = sequential && fileSize > 0 && start >= fileSize - TAIL
+        val toTail = sequential && fileSize > 0 && blockStart >= fileSize - TAIL
         val last = when {
-            !sequential -> (if (fileSize >= 0) minOf(start + blockSize, fileSize) else start + blockSize) - 1
+            !sequential -> (if (fileSize >= 0) minOf(blockStart + blockSize, fileSize) else blockStart + blockSize) - 1
             toTail -> fileSize - 1
             else -> -1L
         }
@@ -455,11 +467,15 @@ internal class RemoteFile(val path: String, knownSize: Long, private val sequent
     /** Reads the next block of the open reply into memory. */
     private fun readBlock() {
         val ins = input ?: return
-        val start = at
+        // The rest of a block that an earlier reply ended short of, or a new block.
+        val carried = partial?.takeIf { it.start + it.filled == at }
+        partial = null
+        val start = carried?.start ?: at
         var length = minOf(blockSize.toLong(), until - start)
         if (fileSize >= 0) length = minOf(length, fileSize - start)
-        val data = ByteArray(length.toInt())
-        var filled = 0
+        val data = carried?.data ?: ByteArray(length.toInt())
+        var filled = carried?.filled ?: 0
+        val before = filled
         while (filled < data.size) {
             val n = ins.read(data, filled, data.size - filled)
             if (n < 0) break
@@ -468,6 +484,12 @@ internal class RemoteFile(val path: String, knownSize: Long, private val sequent
         at = start + filled
         if (filled < data.size) {
             if (announced > at) throw IOException("the camera stopped sending at byte $at of $announced")
+            if (fileSize >= 0 && announced == at && filled > before) {
+                // Less than was asked for, but where the reply said it would end: ask for the rest at once.
+                partial = Partial(start, data, filled)
+                drop()
+                return
+            }
             if (fileSize >= 0) throw IOException("the camera's reply ended at byte $at, before byte ${start + data.size}")
             // Nothing has said how long the file is, and the reply ended where it meant to: so does the file.
             mutex.withLock {

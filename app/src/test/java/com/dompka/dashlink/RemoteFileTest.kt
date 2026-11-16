@@ -259,6 +259,18 @@ class RemoteFileTest {
     }
 
     @Test
+    fun aCameraThatSendsLessThanAskedFor_butSaysSo_isAskedForTheRest() {
+        val data = cam.addFile("Normal", name, 1_000_000)
+        cam.maxReply = 64 * 1024                                       // below both block sizes
+        for (sequential in listOf(false, true)) {
+            val f = remote(data.size.toLong(), sequential)
+            for (pos in listOf(0L, 300_000L, 999_000L, 10L)) assertReads(f, data, pos, 5000)
+            f.close()
+        }
+        assertTrue("${ranges()}", cam.fileRequests().size > 4)
+    }
+
+    @Test
     fun aCameraThatIgnoresRange_isReadFromTheStartOnly() {
         val data = cam.addFile("Normal", name, 3_000_000)
         cam.supportsRange = false

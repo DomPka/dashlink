@@ -154,6 +154,10 @@ class FakeCam : Closeable {
     @Volatile
     var supportsRange = true
 
+    /** At most this many bytes in one 206 reply (0: no limit), and Content-Range says where it ends: a capped server. */
+    @Volatile
+    var maxReply = 0
+
     /** Answer "bytes=N-M" as if it were "bytes=N-": from N to the end of the file, and say so in Content-Range. */
     @Volatile
     var ignoreRangeEnd = false
@@ -347,7 +351,8 @@ class FakeCam : Closeable {
             return Reply(416).also { it.headers["Content-Range"] = "bytes */${data.size}" }
         }
         // An end past the end of the file means "to the end", as in HTTP.
-        val last = if (asked < 0 || asked >= data.size) data.size - 1L else asked
+        val whole = if (asked < 0 || asked >= data.size) data.size - 1L else asked
+        val last = if (maxReply > 0) minOf(whole, from + maxReply - 1) else whole
         return Reply(206, data.copyOfRange(from.toInt(), last.toInt() + 1)).also {
             it.headers["Content-Type"] = "video/mp4"
             it.headers["Content-Range"] = "bytes $from-$last/${data.size}"
