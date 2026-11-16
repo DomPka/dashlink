@@ -30,6 +30,9 @@ class App : Application() {
                 exitProcess(10)
             }
         }
+        // The live view reaches the camera the same way every other request does: over the camera's own link.
+        Live.sockets = Link.liveSockets
+        Live.host = { Link.cameraIp }
         try {
             DownloadService.restore(this)
         } catch (e: Exception) {

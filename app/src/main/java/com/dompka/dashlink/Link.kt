@@ -13,6 +13,9 @@ import android.os.Looper
 import android.os.PatternMatcher
 import android.os.SystemClock
 import java.io.IOException
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.HttpURLConnection
 import java.net.Proxy
 import java.net.URL
@@ -125,6 +128,37 @@ object Link {
         val host = cameraIp ?: throw IOException("camera address not known yet")
         // Straight to the camera: a proxy configured for the phone's other networks must not get in the way.
         return net.openConnection(URL("http://$host$pathAndQuery"), Proxy.NO_PROXY) as HttpURLConnection
+    }
+
+    /** Sockets for the live view, opened on the camera's network like every HTTP request (see Live.kt). */
+    internal val liveSockets = object : LiveSockets {
+        override fun tcp(host: String, port: Int, timeoutMs: Int): Socket {
+            val net = network ?: throw IOException("not connected to the camera")
+            val s = net.socketFactory.createSocket()
+            try {
+                s.connect(InetSocketAddress(host, port), timeoutMs)
+            } catch (e: IOException) {
+                try {
+                    s.close()
+                } catch (ignored: IOException) {
+                    // closing a socket that never connected
+                }
+                throw e
+            }
+            return s
+        }
+
+        override fun udp(): DatagramSocket {
+            val net = network ?: throw IOException("not connected to the camera")
+            val d = DatagramSocket()
+            try {
+                net.bindSocket(d)
+            } catch (e: IOException) {
+                d.close()
+                throw e
+            }
+            return d
+        }
     }
 
     /** The real thing: WifiNetworkSpecifier requests through ConnectivityManager. */

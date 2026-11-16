@@ -27,6 +27,9 @@ object Cam {
     const val INFO = "/cgi-bin/Config.cgi?action=get&property=Vendor.DeviceInfo.*"
     const val STATUS = "/cgi-bin/Config.cgi?action=get&property=status"
 
+    /** The live-view settings (which stream, its size, keep-alive). Read only; see Live.kt. */
+    const val PREVIEW = "/cgi-bin/Config.cgi?action=get&property=Camera.Preview.*"
+
     /** The camera's own app asks for 16 files at a time. */
     const val PAGE = 16
 
@@ -129,6 +132,17 @@ object Cam {
      * Throws [BusyException] if the camera is still busy with something else after [waitMs].
      */
     fun <T> session(waitMs: Long = FOREVER, block: () -> T): T = exclusive(waitMs, block)
+
+    /**
+     * True while something is waiting for its turn at the camera. A long turn that can be resumed later
+     * (the live view, a clip preview) checks this and gives the camera up, so that downloads, file lists
+     * and thumbnails are never held up by it.
+     */
+    fun othersWaiting(): Boolean = gate.hasQueuedThreads()
+
+    /** The camera's live-view settings ("Camera.Preview.*"). Empty if the camera has none. */
+    @Throws(IOException::class)
+    fun previewProps(waitMs: Long = FOREVER): Map<String, String> = parseProps(get(PREVIEW, 8000, waitMs))
 
     private fun open(pathAndQuery: String, timeoutMs: Int): HttpURLConnection {
         requireRead(pathAndQuery)

@@ -79,6 +79,7 @@ internal object Report {
                     for ((title, path) in listOf(
                         "Device info" to Cam.INFO,
                         "Status" to Cam.STATUS,
+                        "Live view settings" to Cam.PREVIEW,
                         "List $folder" to Cam.listUrl(folder, rear, 0, Cam.PAGE)
                     )) {
                         sb.append("\n== $title: $path\n")
@@ -93,6 +94,12 @@ internal object Report {
             } catch (e: Cam.BusyException) {
                 sb.append("\n== Camera not asked: it is busy with a download\n")
             }
+        }
+
+        val live = Live.log()
+        if (live.isNotEmpty()) {
+            sb.append("\n== Live view\n")
+            for (line in live.takeLast(30)) sb.append(Diag.redact(line, listOf(secret))).append("\n")
         }
 
         sb.append("\n== Downloads\n")
