@@ -38,6 +38,7 @@ class App : Application() {
         } catch (e: Exception) {
             // an unreadable saved queue must not stop the app from starting
         }
+        Thumbs.init(this)
     }
 
     companion object {
