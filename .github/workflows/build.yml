@@ -60,7 +60,8 @@ jobs:
     name: Emulator tests (API ${{ matrix.api }})
     needs: apk
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    # The live-view, player and thumbnail tests encode their own test video on the emulator.
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
