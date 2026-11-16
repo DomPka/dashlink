@@ -647,7 +647,7 @@ class MainActivity : Activity() {
         pill.setCompoundDrawablesRelativeWithIntrinsicBounds(lens, null, null, null)
         pill.compoundDrawablePadding = dpi(6f)
         pill.gravity = Gravity.CENTER_VERTICAL
-        pill.setPaddingRelative(dpi(10f), 0, dpi(12f), 0)
+        pill.setPaddingRelative(dpi(10f), 0, dpi(10f), 0)
         card.addView(pill, LinearLayout.LayoutParams(wrap, dpi(28f)))
 
         status = TextView(this)
@@ -874,7 +874,7 @@ class MainActivity : Activity() {
                 livePhase = null
                 showLive(live.status)
             }
-            reveal(tile, want, if (want) 300L else 200L)
+            reveal(tile, want, 300L)
         }
         if (want && started) startLive() else stopLive()
     }

@@ -393,9 +393,12 @@ internal object Kit {
 
     fun permissionDialogShowing(): Boolean = device.findObject(permissionButtons) != null
 
-    /** The list row that shows [namePart]: the smallest thing around that text which also holds a tick box. */
+    /**
+     * The list row that shows [namePart], scrolled into plain view (waited for): the smallest thing around that text
+     * which also holds a tick box.
+     */
     fun clipRow(namePart: String): UiObject2? {
-        var node = clipText(namePart) ?: return null
+        var node = clip(namePart)
         repeat(4) {
             node = node.parent ?: return null
             if (node.findObject(By.checkable(true)) != null) return node
@@ -408,7 +411,7 @@ internal object Kit {
      * the download panel, which on a phone floats over the bottom of the list (a tap there would land on its buttons).
      * A row that is not in plain view is scrolled to the top of the list, and this returns null: look again.
      */
-    fun clipText(namePart: String): UiObject2? {
+    private fun clipText(namePart: String): UiObject2? {
         var clear = false
         onMain {
             val list = front()?.findViewById<ListView>(R.id.list) ?: return@onMain
