@@ -6,6 +6,7 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.os.Build
 import android.os.PowerManager
+import kotlin.math.roundToInt
 
 /**
  * # How to use the design system ("Lens Glass")
@@ -187,12 +188,19 @@ internal class Tokens private constructor(
             errorContainer = 0xFFFFDAD6.toInt(), errorText = 0xFF7A1410.toInt(), lamp = 0xFFE69B00.toInt(),
         )
 
+        /** Two system colours that change with the wallpaper's palette; 0 where there are none (emulator, tests). */
+        private fun paletteFingerprint(context: Context): Long {
+            val a = try { context.getColor(android.R.color.system_accent1_500) } catch (_: RuntimeException) { 0 }
+            val n = try { context.getColor(android.R.color.system_neutral1_500) } catch (_: RuntimeException) { 0 }
+            return ((a.toLong() and 0xFFFFFF) shl 24 or (n.toLong() and 0xFFFFFF)) and 0xFFFFFFFFFFFL
+        }
+
         private var cached: Tokens? = null
         private var cachedKey: Long = -1
 
         /**
-         * The tokens for the current configuration. Cached until light/dark, contrast or battery saver changes,
-         * so the system colours are read once per configuration change.
+         * The tokens for the current configuration. Cached until light/dark, contrast, battery saver or the
+         * wallpaper's colours change (a Material You change while the app runs, e.g. during a download).
          */
         fun of(context: Context): Tokens {
             val dark = (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -202,7 +210,9 @@ internal class Tokens private constructor(
             } catch (_: RuntimeException) {
                 false
             }
-            val key = (if (dark) 1L else 0L) or ((contrast * 100).toLong() shl 1) or (if (saver) 1L shl 20 else 0L)
+            val contrastBits = (((contrast + 1f) * 100).roundToInt() and 0x3FF).toLong()      // -1..1, never negative
+            val key = (if (dark) 1L else 0L) or (contrastBits shl 1) or (if (saver) 1L shl 11 else 0L) or
+                (paletteFingerprint(context) shl 12)
             cached?.let { if (cachedKey == key) return it }
             val tokens = Tokens(
                 dark = dark,

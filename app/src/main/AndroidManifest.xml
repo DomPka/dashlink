@@ -43,13 +43,13 @@
         <!-- Turns with the phone without being rebuilt, so the stream goes on; a second tap on "Open" reuses it. -->
         <activity
             android:name=".LiveActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|density"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard"
             android:exported="false"
             android:launchMode="singleTop" />
 
         <activity
             android:name=".PlayerActivity"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|density"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard"
             android:exported="false" />
 
         <service
