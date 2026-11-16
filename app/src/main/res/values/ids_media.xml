@@ -7,14 +7,11 @@
     <!-- LiveActivity -->
     <item name="live_surface" type="id" />
     <item name="live_close" type="id" />
-    <item name="live_chip" type="id" />
-    <item name="live_readout" type="id" />
     <item name="live_stamp" type="id" />
     <item name="live_info" type="id" />
     <item name="live_card" type="id" />
     <item name="live_card_title" type="id" />
     <item name="live_card_detail" type="id" />
-    <item name="live_retry" type="id" />
     <item name="live_card_close" type="id" />
 
     <!-- PlayerActivity -->
