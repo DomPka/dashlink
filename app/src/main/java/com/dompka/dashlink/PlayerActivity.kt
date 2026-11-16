@@ -505,13 +505,7 @@ class PlayerActivity : Activity() {
                 position = pos
                 showPosition(pos)
             }
-            // How far the clip is in memory, as a time: bytes and time are taken to grow together, which they
-            // only roughly do (a still scene takes fewer bytes than a busy one), so this is an estimate.
-            val f = file
-            if (f != null && duration > 0 && clip.size > 0) {
-                val until = f.bufferedUntil(clip.size * pos / duration)
-                seek.secondaryProgress = (until * duration / clip.size).toInt()
-            }
+            showBuffered(pos)
             val now = SystemClock.uptimeMillis()
             if (playing() && !seeking && pos == lastSeen) {
                 if (stalledSince == 0L) stalledSince = now
@@ -523,6 +517,19 @@ class PlayerActivity : Activity() {
         }
         showRing()
         if (ticks % 4 == 0) slowTick()
+    }
+
+    /**
+     * The seek bar's secondary progress: how far the clip is already in memory from [pos], as a time. It is an
+     * estimate: the byte at [pos] is taken to be at the same fraction of the file as [pos] is of the clip, and the
+     * bytes in memory are turned back into time the same way. Bytes and time only roughly grow together (a still
+     * scene takes fewer bytes than a busy one, and the index sits at the end), so the mark is close, not exact.
+     */
+    private fun showBuffered(pos: Long) {
+        val f = file ?: return
+        if (duration <= 0 || clip.size <= 0) return
+        val until = f.bufferedUntil(clip.size * pos / duration)
+        seek.secondaryProgress = (until * duration / clip.size).toInt()
     }
 
     /** Once a second: the download strip, and whether the camera may be used (or used again). */
