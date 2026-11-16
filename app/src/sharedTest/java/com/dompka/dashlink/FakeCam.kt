@@ -74,9 +74,13 @@ class FakeCam : Closeable {
                 return "/" + out.joinToString("/")
             }
 
-        /** N from "Range: bytes=N-", or -1 when the request has no Range header. */
+        /** N from "Range: bytes=N-" or "bytes=N-M", or -1 when the request has no Range header. */
         val rangeStart: Long
             get() = headers["range"]?.substringAfter("bytes=", "")?.substringBefore('-')?.trim()?.toLongOrNull() ?: -1L
+
+        /** M from "Range: bytes=N-M", or -1 when the range is open-ended or there is none. */
+        val rangeEnd: Long
+            get() = headers["range"]?.substringAfter("bytes=", "")?.substringAfter('-', "")?.trim()?.toLongOrNull() ?: -1L
     }
 
     class Reply(var status: Int, var body: ByteArray = ByteArray(0)) {
@@ -139,9 +143,13 @@ class FakeCam : Closeable {
     /** File path -> content. */
     val files = ConcurrentHashMap<String, ByteArray>()
 
-    /** Honour "Range: bytes=N-" on file requests. */
+    /** Honour "Range: bytes=N-" and "bytes=N-M" on file requests (false: every file request gets the whole file, 200). */
     @Volatile
     var supportsRange = true
+
+    /** Answer "bytes=N-M" as if it were "bytes=N-": from N to the end of the file, and say so in Content-Range. */
+    @Volatile
+    var ignoreRangeEnd = false
 
     /** Replace any reply: return null to get the normal behaviour. */
     @Volatile
@@ -320,15 +328,19 @@ class FakeCam : Closeable {
         }
         val data = files[req.path] ?: return text(404, "not found")
         val from = req.rangeStart
-        if (from < 0 || !supportsRange) {
+        val asked = if (ignoreRangeEnd) -1L else req.rangeEnd
+        // A range that ends before it starts is not a range at all; like a web server, take the whole file.
+        if (from < 0 || !supportsRange || asked in 0 until from) {
             return Reply(200, data).also { it.headers["Content-Type"] = "video/mp4" }
         }
         if (from >= data.size) {
             return Reply(416).also { it.headers["Content-Range"] = "bytes */${data.size}" }
         }
-        return Reply(206, data.copyOfRange(from.toInt(), data.size)).also {
+        // An end past the end of the file means "to the end", as in HTTP.
+        val last = if (asked < 0 || asked >= data.size) data.size - 1L else asked
+        return Reply(206, data.copyOfRange(from.toInt(), last.toInt() + 1)).also {
             it.headers["Content-Type"] = "video/mp4"
-            it.headers["Content-Range"] = "bytes $from-${data.size - 1}/${data.size}"
+            it.headers["Content-Range"] = "bytes $from-$last/${data.size}"
         }
     }
 

@@ -16,6 +16,7 @@ import java.util.concurrent.locks.ReentrantLock
  *   file list     : GET /cgi-bin/Config.cgi?action=dir&property=<folder>&count=N&from=K&format=all&backward=
  *                   (action=reardir for the rear camera)                             -> XML, one <file> per clip
  *   a file        : GET <the /SD/... path from the list>, supports "Range: bytes=N-"
+ *                   (RemoteFile also asks for "bytes=N-M"; whether the camera keeps to M is not known)
  *   keep-alive    : GET /cgi-bin/Config.cgi?action=get&property=status
  *
  * This class only ever reads. It never sends action=set / del / format, and [requireRead] refuses
@@ -139,6 +140,22 @@ object Cam {
      * and thumbnails are never held up by it.
      */
     fun othersWaiting(): Boolean = gate.hasQueuedThreads()
+
+    /**
+     * Waits up to [waitMs] for a turn at the camera and keeps it until [endTurn], for a reader that holds one
+     * transfer open across many calls (RemoteFile). The gate is a ReentrantLock, so [endTurn] must be called
+     * on the thread that got the turn. While this waits, it counts as [othersWaiting]. False if the camera is
+     * still busy.
+     */
+    @Throws(IOException::class)
+    internal fun beginTurn(waitMs: Long): Boolean = try {
+        gate.tryLock(waitMs, TimeUnit.MILLISECONDS)
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        throw InterruptedIOException("interrupted while waiting for the camera")
+    }
+
+    internal fun endTurn() = gate.unlock()
 
     /** The camera's live-view settings ("Camera.Preview.*"). Empty if the camera has none. */
     @Throws(IOException::class)
@@ -435,11 +452,14 @@ object Cam {
 
     // ---------------------------------------------------------------- files
 
-    /** What a Content-Range header says. [start] is -1 for the "no such range" form; [total] is -1 when it is not given. */
-    private class Range(val start: Long, val total: Long)
+    /**
+     * What a Content-Range header says. [start] is -1 for the "no such range" form; [end] (the last byte sent)
+     * and [total] are -1 when they are not given.
+     */
+    internal class Range(val start: Long, val end: Long, val total: Long)
 
     /** A Content-Range header that is there but makes no sense. */
-    private val unreadable = Range(-2, -1)
+    internal val unreadable = Range(-2, -1, -1)
 
     /**
      * Reads "bytes 100-999/1000" - also with "=" where the space belongs and without the total, as
@@ -447,7 +467,7 @@ object Cam {
      * is one that cannot be understood. The two must not be confused: no header can be taken on
      * trust, a garbled one cannot.
      */
-    private fun contentRange(header: String?): Range? {
+    internal fun contentRange(header: String?): Range? {
         val h = header?.trim()
         if (h.isNullOrEmpty()) return null
         if (!h.startsWith("bytes", ignoreCase = true)) return unreadable
@@ -455,9 +475,24 @@ object Cam {
         val slash = spec.indexOf('/')
         val span = (if (slash >= 0) spec.substring(0, slash) else spec).trim()
         val total = if (slash >= 0) spec.substring(slash + 1).trim().toLongOrNull() ?: -1L else -1L
-        if (span == "*") return Range(-1, total)
+        if (span == "*") return Range(-1, -1, total)
         val first = span.substringBefore('-').trim().toLongOrNull() ?: return unreadable
-        return if (first < 0) unreadable else Range(first, total)
+        val last = span.substringAfter('-', "").trim().toLongOrNull() ?: -1L
+        return if (first < 0) unreadable else Range(first, last, total)
+    }
+
+    /**
+     * A connection for the bytes [first] to [last] of a file from the list ([last] < 0: to the end of the file),
+     * through the same read-only guard and camera link as everything else. It is not connected yet: the caller
+     * does that within its own turn at the camera ([beginTurn]); nothing in here waits for one.
+     */
+    @Throws(IOException::class)
+    internal fun openRange(path: String, first: Long, last: Long, timeoutMs: Int): HttpURLConnection {
+        val c = open(filePath(path), timeoutMs)
+        // A compressed reply could not be cut into byte ranges.
+        c.setRequestProperty("Accept-Encoding", "identity")
+        c.setRequestProperty("Range", if (last >= 0) "bytes=$first-$last" else "bytes=$first-")
+        return c
     }
 
     private inline fun <T> storage(what: String, block: () -> T): T = try {
