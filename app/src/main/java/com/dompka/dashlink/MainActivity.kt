@@ -1434,6 +1434,13 @@ class MainActivity : Activity() {
     private class EndFadeScroll(context: Context) : HorizontalScrollView(context) {
         private val rtl: Boolean get() = layoutDirection == View.LAYOUT_DIRECTION_RTL
 
+        init {
+            // Clips to its own bounds (see CappedScroll): otherwise the folders that scroll out of it are drawn on
+            // under the separator and the Rear cam chip.
+            outlineProvider = ViewOutlineProvider.BOUNDS
+            clipToOutline = true
+        }
+
         override fun getLeftFadingEdgeStrength(): Float = if (rtl) super.getLeftFadingEdgeStrength() else 0f
 
         override fun getRightFadingEdgeStrength(): Float = if (rtl) 0f else super.getRightFadingEdgeStrength()

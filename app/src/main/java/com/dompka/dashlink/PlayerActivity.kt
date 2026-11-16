@@ -29,6 +29,7 @@ import android.view.Surface
 import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.widget.Button
 import android.widget.FrameLayout
@@ -659,6 +660,10 @@ class PlayerActivity : Activity() {
         scroll = ScrollView(this)
         scroll.isVerticalScrollBarEnabled = false
         scroll.clipToPadding = false
+        // Its parents let children draw outside (for shadows), so it clips itself: scrolled cards must pass under
+        // the pinned video and top bar, not over them.
+        scroll.outlineProvider = ViewOutlineProvider.BOUNDS
+        scroll.clipToOutline = true
         body = LinearLayout(this)
         body.orientation = LinearLayout.VERTICAL
         body.setPadding(dpi(16f), dpi(4f), dpi(16f), dpi(16f))
