@@ -131,14 +131,21 @@ class PlayerTest {
     }
 
     @Test
-    fun openedWhileADownloadRuns_waits_thenPlaysByItself() {
+    fun aDownloadStarts_thePlayerLetsGo_andOneOpenedMeanwhileWaits_thenPlays() {
         val clip = rig.clip("Normal", name("W"), TestVideo.mp4(6, 640, 360, 25), "2026-03-01 10:10:00", secs = "6")
         val other = rig.clip("Normal", name("X"), ByteArray(3_000_000) { (it * 7).toByte() }, "2026-03-01 10:11:00")
-        rig.slowDownload(other, 60)
+        ActivityScenario.launch<PlayerActivity>(intent(clip, "Normal")).use {
+            awaitElapsed(1, "playing before the download")
+            // Started while the player is on screen, as Android wants for a foreground service.
+            rig.slowDownload(other, 60)
+            Kit.see(Regex.escape(LiveSurface.DOWNLOAD_BUSY))
+        }
+        assertTrue("the download still runs", DownloadService.working)
+        val read = rig.cam.fileRequests().count { it.path == clip.path }
         ActivityScenario.launch<PlayerActivity>(intent(clip, "Normal")).use {
             Kit.see(Regex.escape(LiveSurface.DOWNLOAD_BUSY))
             Kit.holds("the clip is not read while the download runs", 3_000) {
-                rig.cam.fileRequests().none { it.path == clip.path }
+                rig.cam.fileRequests().count { it.path == clip.path } == read
             }
             DownloadService.stopAll(Kit.ctx)
             awaitElapsed(1, "playing once the download stopped")

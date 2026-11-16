@@ -99,6 +99,10 @@ class LiveActivity : Activity() {
 
     /** What the LIVE chip shows now (null: not drawn since the screen came back). */
     private var chipLive: Boolean? = null
+
+    /** The picture was playing at the last render: the controls start their countdown when it begins. */
+    private var wasPlaying = false
+    private var cardMono: Boolean? = null
     private var portrait: Boolean? = null
     private var started = false
     private var startedAt = 0L
@@ -158,6 +162,7 @@ class LiveActivity : Activity() {
         blink?.cancel()
         blink = null
         chipLive = null
+        wasPlaying = false
         super.onStop()
     }
 
@@ -407,7 +412,10 @@ class LiveActivity : Activity() {
             root.addView(bar, FrameLayout.LayoutParams(match, wrap, Gravity.TOP))
             root.addView(card, FrameLayout.LayoutParams(cardWidth(), wrap, Gravity.CENTER))
         }
+        // Controls come back in the new shape; the next render starts their countdown again.
         controlsShown = true
+        wasPlaying = false
+        ui.removeCallbacks(hideControls)
         for (v in listOf(scrim, bar)) {
             v.animate().cancel()
             v.alpha = 1f
@@ -435,39 +443,48 @@ class LiveActivity : Activity() {
             card.visibility = View.GONE
             dim.visibility = View.GONE
         } else {
-            cardIcon.setImageDrawable(look.icon)
-            cardTitle.text = look.title
-            cardDetail.text = look.detail
-            if (look.mono) Type.osd(cardDetail) else Type.body(cardDetail)
+            if (cardIcon.drawable !== look.icon) cardIcon.setImageDrawable(look.icon)
+            set(cardTitle, look.title)
+            set(cardDetail, look.detail)
+            if (cardMono != look.mono) {
+                cardMono = look.mono
+                if (look.mono) Type.osd(cardDetail) else Type.body(cardDetail)
+            }
             retry.visibility = if (look.retry) View.VISIBLE else View.GONE
             card.visibility = View.VISIBLE
             dim.visibility = if (surface.showing) View.VISIBLE else View.GONE
         }
-        // Controls stay while there is something to read or tap; only a playing picture hides them.
-        if (!playing && !controlsShown) showControls(true) else if (playing && controlsShown) scheduleHide()
+        // Upright, the state card stands where the readouts would; it has its own Close.
+        info.visibility = if (look == null) View.VISIBLE else View.GONE
+        // Controls stay while there is something to read or tap; only a playing picture hides them, once it starts.
+        if (!playing && !controlsShown) showControls(true)
+        if (playing && !wasPlaying) scheduleHide()
+        wasPlaying = playing
     }
 
     private fun look(s: Live.Status, connected: Boolean): Look? {
-        val starting = Look(lens(LensGlyphDrawable.State.SEARCHING, t.accent), "Starting live view…", s.detail, true, false)
+        val starting = Look(startingIcon, "Starting live view…", s.detail, true, false)
         return when {
-            !connected -> Look(
-                lens(LensGlyphDrawable.State.LOST, t.errorText), "Not connected to the camera",
-                "Live view starts when the camera is connected.", false, false,
-            )
+            !connected -> Look(lostIcon, "Not connected to the camera", "Live view starts when the camera is connected.", false, false)
             s.phase == Live.Phase.PLAYING -> null
-            s.phase == Live.Phase.PAUSED_BUSY && (DownloadService.working || s.detail == LiveSurface.DOWNLOAD_BUSY) -> Look(
-                icon(R.drawable.ic_pause, t.warnText), LiveSurface.DOWNLOAD_BUSY,
-                "Live view resumes when the download finishes.", false, false,
-            )
+            s.phase == Live.Phase.PAUSED_BUSY && (DownloadService.working || s.detail == LiveSurface.DOWNLOAD_BUSY) ->
+                Look(busyIcon, LiveSurface.DOWNLOAD_BUSY, "Live view resumes when the download finishes.", false, false)
             s.phase == Live.Phase.PAUSED_BUSY && SystemClock.uptimeMillis() - startedAt < GRACE_MS -> starting
-            s.phase == Live.Phase.PAUSED_BUSY -> Look(
-                icon(R.drawable.ic_pause, t.warnText), "Camera busy", "Live view resumes when the camera is free.", false, false,
-            )
-            s.phase == Live.Phase.UNAVAILABLE -> Look(
-                icon(R.drawable.ic_lens_off, t.errorText), "Live view not available", sentence(s.detail), false, true,
-            )
+            s.phase == Live.Phase.PAUSED_BUSY -> Look(busyIcon, "Camera busy", "Live view resumes when the camera is free.", false, false)
+            s.phase == Live.Phase.UNAVAILABLE -> Look(offIcon, "Live view not available", sentence(s.detail), false, true)
             else -> starting
         }
+    }
+
+    // Made once: a new lens glyph on every status would restart its rotation.
+    private val startingIcon by lazy { lens(LensGlyphDrawable.State.SEARCHING, t.accent) }
+    private val lostIcon by lazy { lens(LensGlyphDrawable.State.LOST, t.errorText) }
+    private val busyIcon by lazy { icon(R.drawable.ic_pause, t.warnText) }
+    private val offIcon by lazy { icon(R.drawable.ic_lens_off, t.errorText) }
+
+    /** Setting the same text again would still lay the view out again, twice a second while it plays. */
+    private fun set(tv: TextView, text: String) {
+        if (tv.text.toString() != text) tv.text = text
     }
 
     private fun sentence(s: String) = s.replaceFirstChar { it.titlecase(Locale.US) }
@@ -513,10 +530,10 @@ class LiveActivity : Activity() {
     }
 
     private fun showInfo(s: Live.Status, playing: Boolean) {
-        infoSub.text = Link.cameraSsid?.removeSurrounding("\"") ?: "Camera"
-        factValues["Stream"]?.text = if (playing) listOfNotNull(s.stream?.substringAfterLast('/'), s.transport).joinToString(" · ") else "—"
-        factValues["Picture"]?.text = if (playing) s.detail else "—"
-        factValues["Clock"]?.text = "phone time"
+        set(infoSub, Link.cameraSsid?.removeSurrounding("\"") ?: "Camera")
+        factValues["Stream"]?.let { set(it, if (playing) listOfNotNull(s.stream?.substringAfterLast('/'), s.transport).joinToString(" · ") else "—") }
+        factValues["Picture"]?.let { set(it, if (playing) s.detail else "—") }
+        factValues["Clock"]?.let { set(it, "phone time") }
     }
 
     private fun scheduleHide() {

@@ -334,7 +334,11 @@ internal class MediaRig : java.io.Closeable {
         return Cam.Clip(path, data.size.toLong(), time, res, secs)
     }
 
-    /** A download of [clip] that takes about [seconds] (FakeCam sends it slowly), started through the service. */
+    /**
+     * A download of [clip] that takes about [seconds] (FakeCam sends it slowly), started through the service. Call it
+     * while one of the app's screens is showing: Android does not let an app in the background start a foreground
+     * service.
+     */
     fun slowDownload(clip: Cam.Clip, seconds: Int) {
         val chunk = 16 * 1024
         val delay = seconds * 1000L * chunk / maxOf(1L, clip.size)

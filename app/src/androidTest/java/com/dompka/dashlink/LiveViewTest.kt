@@ -141,7 +141,7 @@ class LiveViewTest {
                 val t0 = SystemClock.uptimeMillis()
                 Cam.session(10_000) {
                     waited.set(SystemClock.uptimeMillis() - t0)
-                    SystemClock.sleep(2_500)
+                    SystemClock.sleep(4_000)                    // a long list, say
                 }
             }, "other-request")
             other.start()
@@ -157,15 +157,24 @@ class LiveViewTest {
     }
 
     @Test
-    fun whileADownloadRuns_theViewerDoesNotTouchTheCamera_thenPlays() {
+    fun whileADownloadRuns_theViewerKeepsAwayFromTheCamera_thenPlays() {
         rig.rtsp.streams["/liveRTSP/av4"] = TestVideo.h264(4, 640, 360, 25).stream()
         val clip = rig.clip("Normal", "T${System.nanoTime()}_L.MP4", ByteArray(3_000_000) { (it * 31).toByte() }, "2026-03-01 10:00:00")
         try {
-            rig.slowDownload(clip, 60)
+            // A download that starts while the viewer plays: the viewer steps aside and waits.
             ActivityScenario.launch(LiveActivity::class.java).use { s ->
+                awaitPlaying(s, "before the download")
+                rig.slowDownload(clip, 60)
                 Kit.until("the busy card") { shown(s, R.id.live_card) && text(s, R.id.live_card_title) == LiveSurface.DOWNLOAD_BUSY }
                 assertEquals("Live view resumes when the download finishes.", text(s, R.id.live_card_detail))
-                Kit.holds("not a single live-view request while the download runs", 3_000) { rig.rtsp.requests.isEmpty() }
+                val sent = rig.rtsp.requests.size
+                Kit.holds("no live-view request while the download runs", 3_000) { rig.rtsp.requests.size == sent }
+            }
+            // A viewer opened while it runs does not even try.
+            val sent = rig.rtsp.requests.size
+            ActivityScenario.launch(LiveActivity::class.java).use { s ->
+                Kit.until("the busy card on a new viewer") { shown(s, R.id.live_card) && text(s, R.id.live_card_title) == LiveSurface.DOWNLOAD_BUSY }
+                Kit.holds("not a single live-view request from the new viewer", 3_000) { rig.rtsp.requests.size == sent }
                 assertEquals(Live.Phase.PAUSED_BUSY, status(s).phase)
                 DownloadService.stopAll(Kit.ctx)
                 Kit.until("the download to stop", 20_000) { !DownloadService.working }

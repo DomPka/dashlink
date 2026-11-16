@@ -3,6 +3,7 @@ package com.dompka.dashlink
 import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.widget.ImageView
+import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -110,7 +111,9 @@ class ThumbsTest {
     fun whileADownloadRuns_nothingIsFetched_thenTheThumbnailsCome() {
         val clips = clips(2)
         val big = rig.clip("Normal", "T${tag}_D.MP4", ByteArray(3_000_000) { (it * 13).toByte() }, "2026-03-01 10:09:00")
-        rig.slowDownload(big, 60)
+        // Android starts a foreground service only for an app on screen: the viewer is the screen here. Once it
+        // closes, thumbnails are no longer held off by it; only the download keeps them waiting.
+        ActivityScenario.launch(LiveActivity::class.java).use { rig.slowDownload(big, 60) }
         val views = views(2)
         for ((v, c) in views.zip(clips)) bind(v, c)
         Kit.holds("no thumbnail is fetched while the download runs", 4_000) {

@@ -122,6 +122,9 @@ class PlayerActivity : Activity() {
     private var tens = -1L
     private var ticks = 0
 
+    /** What the play button shows (true: Pause), null before the first time. */
+    private var playShown: Boolean? = null
+
     /** When Download was tapped (uptime), 0 if not; and what Android said if it refused to start the service. */
     private var askedAt = 0L
     private var problem: String? = null
@@ -471,6 +474,8 @@ class PlayerActivity : Activity() {
 
     private fun showPlayState() {
         val on = playing() || (wantPlay && show == Show.OPENING)
+        if (on == playShown) return
+        playShown = on
         play.setImageResource(if (on) R.drawable.ic_pause else R.drawable.ic_play)
         play.contentDescription = if (on) "Pause" else "Play"
     }
