@@ -89,12 +89,20 @@ class CamRequestTest {
 
     @Test
     fun get_nothingListening() {
-        cam.close()
-        try {
-            Cam.get(Cam.STATUS, 1000)
-            fail("should fail")
-        } catch (e: IOException) {
-            // connection refused
+        // A port held by a socket that is bound but never listens: connecting to it is always
+        // refused, and no other test can take the port meanwhile (a freed port could be reused).
+        java.net.Socket().use { held ->
+            held.bind(java.net.InetSocketAddress("127.0.0.1", 0))
+            val port = held.localPort
+            Cam.opener = Cam.Opener { path ->
+                java.net.URL("http://127.0.0.1:$port$path").openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
+            }
+            try {
+                Cam.get(Cam.STATUS, 1000)
+                fail("should fail")
+            } catch (e: IOException) {
+                // connection refused
+            }
         }
     }
 
