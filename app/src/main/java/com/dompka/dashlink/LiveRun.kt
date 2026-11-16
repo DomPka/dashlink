@@ -69,6 +69,9 @@ internal object LiveLog {
     }
 
     fun lines(): List<String> = synchronized(lines) { lines.toList() }
+
+    /** Forgets every line (tests start from an empty log, so a line from an earlier test cannot pass for theirs). */
+    fun clear() = synchronized(lines) { lines.clear() }
 }
 
 /**

@@ -81,6 +81,7 @@ internal class LiveHarness(props: String? = null) : Closeable {
     private val oldBackOff = LiveTiming.backOffMs
 
     init {
+        LiveLog.clear()
         Live.sockets = rtsp.sockets()
         Live.host = { host }
         Cam.opener = cam?.opener() ?: Cam.Opener { throw IOException("no camera settings in this test") }

@@ -118,6 +118,12 @@ internal object Kit {
         // Android explains swipe-to-exit the first time an app goes full screen (the live viewer); that box would
         // sit over the viewer and take the first Back. A user sees it once; tests start on a fresh emulator.
         shell("settings put secure immersive_mode_confirmations confirmed")
+        // A test whose process died before its tearDown could leave the display resized, dark or turned:
+        // every test starts from the plain phone screen (these are no-ops when nothing was changed).
+        shell("wm size reset")
+        shell("wm density reset")
+        shell("cmd uimode night no")
+        device.setOrientationNatural()
         // Android's Wi-Fi prompt lives in the Settings app, and a box it left open in an earlier test
         // would sit in front of the next one.
         shell("am force-stop com.android.settings")

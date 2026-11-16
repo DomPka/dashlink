@@ -37,4 +37,5 @@
 
     <!-- Thumbs: the tag that says which clip an ImageView is showing -->
     <item name="thumb_key" type="id" />
+    <item name="thumb_ready" type="id" />
 </resources>

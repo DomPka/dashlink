@@ -77,12 +77,15 @@ internal object Thumbs {
     fun bind(view: ImageView, clip: Cam.Clip, ready: (Boolean) -> Unit) {
         val key = key(clip)
         view.setTag(R.id.thumb_key, key)
+        // The answer is kept on the view, not here: a callback that holds a row would keep a closed screen alive
+        // for as long as its request waits.
+        view.setTag(R.id.thumb_ready, Ready(ready))
         val known = memory.get(key)
         val failedBefore = lock.withLock {
             drop(view)
             if (known == null && key !in failed) {
                 val p = pending.getOrPut(key) { Pending(clip) }
-                p.waiters.add(Waiter(WeakReference(view), ready))
+                p.waiters.add(Waiter(WeakReference(view)))
                 waitingFor[view] = key
                 queue.remove(key)
                 queue.addFirst(key)
@@ -106,6 +109,7 @@ internal object Thumbs {
     /** Forget [view] (it left the screen). */
     fun unbind(view: ImageView) {
         view.setTag(R.id.thumb_key, null)
+        view.setTag(R.id.thumb_ready, null)
         lock.withLock { drop(view) }
     }
 
@@ -148,7 +152,10 @@ internal object Thumbs {
     /** Watches a fetch under way: its time limit, and whether the camera may still be asked at all. */
     private val guard = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "dashlink-thumbs-guard").apply { isDaemon = true } }
 
-    private class Waiter(val view: WeakReference<ImageView>, val ready: (Boolean) -> Unit)
+    /** A view waiting for a picture. Only weakly held: its answer lives in its own [Ready] tag. */
+    private class Waiter(val view: WeakReference<ImageView>)
+
+    private class Ready(val call: (Boolean) -> Unit)
 
     /** A clip somebody waits for; [diskChecked] stays false until the disk cache was looked at for it. */
     private class Pending(val clip: Cam.Clip) {
@@ -283,7 +290,7 @@ internal object Thumbs {
                 val view = w.view.get() ?: continue
                 if (view.getTag(R.id.thumb_key) != key) continue        // bound to another clip meanwhile
                 if (bitmap != null) view.setImageBitmap(bitmap)
-                w.ready(bitmap != null)
+                (view.getTag(R.id.thumb_ready) as? Ready)?.call?.invoke(bitmap != null)
             }
         }
     }

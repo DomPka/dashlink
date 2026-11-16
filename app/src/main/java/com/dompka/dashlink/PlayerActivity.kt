@@ -31,6 +31,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowInsets
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -484,6 +485,9 @@ class PlayerActivity : Activity() {
         val on = playing() || (wantPlay && show == Show.OPENING)
         if (on == playShown) return
         playShown = on
+        // A clip longer than the screen time-out would otherwise be cut off when the screen turns off (onStop).
+        if (on) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         play.setImageResource(if (on) R.drawable.ic_pause else R.drawable.ic_play)
         play.contentDescription = if (on) "Pause" else "Play"
     }

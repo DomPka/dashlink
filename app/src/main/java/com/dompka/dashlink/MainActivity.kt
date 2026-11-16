@@ -104,6 +104,9 @@ class MainActivity : Activity() {
     private lateinit var colA: LinearLayout
     private lateinit var colB: LinearLayout
     private lateinit var topScroll: CappedScroll
+
+    /** When a tap last opened the viewer or the player (see [leaving]). */
+    private var openedAt = 0L
     private lateinit var lane: View
     private lateinit var bottom: LinearLayout
     private var wide: Boolean? = null
@@ -250,6 +253,7 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         started = true
+        openedAt = 0L
         wasReady = Link.ready
         lastState = Link.state
         Thumbs.paused = false
@@ -928,13 +932,23 @@ class MainActivity : Activity() {
 
     /** The full-screen viewer. The tile lets go of the camera first, so the viewer gets it at once. */
     private fun openViewer() {
+        if (leaving()) return
         stopLive()
         LiveActivity.open(this)
     }
 
     private fun openPlayer(clip: Cam.Clip) {
+        if (leaving()) return
         stopLive()
         PlayerActivity.open(this, clip, listFolder)
+    }
+
+    /** True for a second tap while the first one's screen is still opening: a double tap opens one screen, not two. */
+    private fun leaving(): Boolean {
+        val now = SystemClock.uptimeMillis()
+        if (now - openedAt < OPEN_GUARD_MS) return true
+        openedAt = now
+        return false
     }
 
     /** What LiveSurface reports, drawn over and around its picture (5.8). Main thread. */
@@ -2243,6 +2257,9 @@ class MainActivity : Activity() {
     private companion object {
         const val ASK_FIRST = 1
         const val ASK_AGAIN = 2
+
+        /** A second tap on a thumbnail or the tile within this long opens nothing more (see leaving()). */
+        const val OPEN_GUARD_MS = 800L
 
         /** The red of a dot on video (1b); Tokens.liveDot follows light and dark, a picture is always dark. */
         val VIDEO_RED = 0xFFFF5A52.toInt()
