@@ -219,6 +219,12 @@ class PlayerActivity : Activity() {
         ui.post(ticker)
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Closing: the camera is let go now, before the screen underneath starts and asks for it (see onStop).
+        if (isFinishing) release()
+    }
+
     override fun onStop() {
         started = false
         release()
@@ -570,7 +576,7 @@ class PlayerActivity : Activity() {
         if (note != null) stripNote.text = note
         if (job == null || !active) return
         progressTitle.text = when (job.state) {
-            Jobs.QUEUED -> "Queued…"
+            Jobs.QUEUED -> if (Jobs.paused != null) "Paused…" else "Queued…"
             Jobs.WAITING -> "Waiting for the camera…"
             Jobs.SAVING -> "Saving…"
             else -> "Downloading…"

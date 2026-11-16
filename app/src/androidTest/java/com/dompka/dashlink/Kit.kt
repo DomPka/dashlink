@@ -123,7 +123,9 @@ internal object Kit {
         shell("wm size reset")
         shell("wm density reset")
         shell("cmd uimode night no")
+        shell("settings put system font_scale 1.0")
         device.setOrientationNatural()
+        device.unfreezeRotation()
         // Android's Wi-Fi prompt lives in the Settings app, and a box it left open in an earlier test
         // would sit in front of the next one.
         shell("am force-stop com.android.settings")

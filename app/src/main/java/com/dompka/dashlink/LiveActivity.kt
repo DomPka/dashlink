@@ -151,6 +151,13 @@ class LiveActivity : Activity() {
         render()
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Closing: let the camera go now rather than in onStop, which comes only after the screen underneath has
+        // started and asked for it (the main screen's tile would see "busy" for a moment).
+        if (isFinishing) surface.stop()
+    }
+
     override fun onStop() {
         started = false
         surface.stop()

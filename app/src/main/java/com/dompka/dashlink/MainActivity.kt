@@ -293,6 +293,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         // Only if it is still ours: a newer screen may already have taken over.
         if (Browser.onChange === refresh) Browser.onChange = null
+        // The rows on screen stop waiting for thumbnails: nobody will see them.
+        for (i in 0 until list.childCount) (list.getChildAt(i) as? ClipRow)?.let { Thumbs.unbind(it.thumb) }
         live.onStatus = null
         stopLive()
         ui.removeCallbacksAndMessages(null)
