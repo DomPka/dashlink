@@ -5,16 +5,19 @@ import java.net.DatagramSocket
 import java.net.Socket
 
 /*
- * CONTRACT (to be implemented): the camera's live view.
+ * The camera's live view: Live.run finds a stream, plays it into a VideoSink and gives the camera up whenever something
+ * else needs it. The pieces: LiveRun.kt (the loop, the camera's turn, retries), Rtsp.kt (requests, replies, SDP),
+ * Rtp.kt and Jpeg.kt (packets back into pictures).
  *
  * What is known (from cameras of the same firmware family; nothing confirmed on a 956W): the camera serves
  * RTSP on port 554 at /liveRTSP/av1 .. av4 and /liveRTSP/v1 .. v3; front-camera video has been reported on
  * av2 and av4. "Camera.Preview.RTSP.av" (read with action=get) probably names the default av stream, and
  * "Camera.Preview.RTSP.keepalive" (60) the session time-out in seconds. Whether the server accepts RTP over
- * TCP (interleaved) or only UDP is unknown, so both are needed. No set command is sent, ever.
+ * TCP (interleaved) or only UDP is unknown, so both are tried: TCP first, UDP when TCP is refused or shows nothing.
+ * No set command is sent, ever.
  *
  * Read-only: the only RTSP methods this app may send are OPTIONS, DESCRIBE, SETUP, PLAY, GET_PARAMETER and
- * TEARDOWN, and only to the paths [Live.requireStreamPath] accepts.
+ * TEARDOWN, and only to the paths [Live.requireStreamPath] accepts (Rtsp.requireRequest checks every request).
  */
 
 /** What a camera stream carries. */
@@ -91,24 +94,39 @@ internal object Live {
         val lagging: Boolean = false,
     )
 
+    private const val PREFIX = "/liveRTSP/"
+
+    /** After the camera's own default: the front camera's reported streams first, then the rest. */
+    private val ORDER = listOf("av4", "av2", "v1", "v2", "v3", "av1", "av3")
+
     /** Throws [Cam.RefusedException] unless [path] is /liveRTSP/av<digit> or /liveRTSP/v<digit>. */
     fun requireStreamPath(path: String) {
-        TODO("contract")
+        val name = if (path.startsWith(PREFIX)) path.substring(PREFIX.length) else ""
+        val ok = (name.length == 3 && name.startsWith("av") && name[2] in '1'..'9') ||
+            (name.length == 2 && name[0] == 'v' && name[1] in '1'..'9')
+        if (!ok) throw Cam.RefusedException("refused: not a live stream: ${path.take(100)}")
     }
 
     /** Which stream paths to try, best first, from what the camera's settings say (Camera.Preview.*). */
-    fun candidates(props: Map<String, String>): List<String> = TODO("contract")
+    fun candidates(props: Map<String, String>): List<String> {
+        val out = LinkedHashSet<String>()
+        val own = previewProp(props, "Camera.Preview.RTSP.av")?.trim()?.toIntOrNull()
+        if (own != null && own in 1..9) out.add("${PREFIX}av$own")
+        for (name in ORDER) out.add(PREFIX + name)
+        return out.toList()
+    }
 
     /**
      * Blocking; returns only when [stop] returns true (checked at least every 250 ms). Finds a stream, plays
      * it into [sink], gives the camera up whenever [Cam.othersWaiting] says something else needs it and comes
-     * back when it is free. Holds the camera (Cam.session) only while streaming. Never throws for camera or
-     * network trouble: it reports through [status] (called on the streaming thread) and retries with back-off.
+     * back when it is free. Holds the camera (Cam.session, without ever queueing for it) only while it looks for a
+     * stream or plays one. Never throws for camera or network trouble: it reports through [status] (called on the
+     * streaming thread) and retries with back-off.
      */
     fun run(sink: VideoSink, stop: () -> Boolean, status: (Status) -> Unit) {
-        TODO("contract")
+        LiveRun(sink, stop, status).run()
     }
 
     /** The last attempts, newest last, one line each, for the diagnostics report (no secrets in it). */
-    fun log(): List<String> = emptyList()
+    fun log(): List<String> = LiveLog.lines()
 }
