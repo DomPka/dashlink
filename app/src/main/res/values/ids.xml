@@ -17,4 +17,21 @@
     <item name="download" type="id" />
     <item name="stop" type="id" />
     <item name="diag" type="id" />
+    <!-- The state of the link in a word, next to its lens glyph. -->
+    <item name="pill" type="id" />
+    <!-- The live tile: the whole card, the text over the picture (and the reason under it when there is no picture),
+         the LIVE / PAUSED chip, its title, the fps readout and its two buttons. -->
+    <item name="live_tile" type="id" />
+    <item name="live_state" type="id" />
+    <item name="live_reason" type="id" />
+    <item name="live_chip" type="id" />
+    <item name="live_title" type="id" />
+    <item name="live_readout" type="id" />
+    <item name="live_open" type="id" />
+    <item name="live_retry" type="id" />
+    <!-- A clip row's thumbnail; tapping it opens the clip. -->
+    <item name="thumb" type="id" />
+    <!-- The download panel: the clip on its way and how far through the queue it is. -->
+    <item name="panel_clip" type="id" />
+    <item name="panel_count" type="id" />
 </resources>
