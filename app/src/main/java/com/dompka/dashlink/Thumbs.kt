@@ -186,7 +186,8 @@ internal object Thumbs {
     private fun isPhoto(name: String) = name.endsWith(".jpg", ignoreCase = true) || name.endsWith(".jpeg", ignoreCase = true)
 
     /** May the camera be asked right now? (Called on the worker and the guard thread, without [lock].) */
-    private fun allowed() = linkReady && !paused && !DownloadService.working && lock.withLock { holders.isEmpty() }
+    private fun allowed() =
+        linkReady && !paused && !DownloadService.working && !Browser.listing && lock.withLock { holders.isEmpty() }
 
     /** Under [lock]: takes [view] out of the request it waited for; a request nobody waits for is dropped. */
     private fun drop(view: ImageView) {
@@ -339,7 +340,7 @@ internal object Thumbs {
         /** A photo too large to read for a thumbnail: not the camera's fault. */
         object TooBig : Made()
 
-        /** The camera may no longer be asked (a download started, the link went, thumbnails were paused). */
+        /** The camera may no longer be asked (a download or a list started, the link went, thumbnails were paused). */
         object Interrupted : Made()
     }
 

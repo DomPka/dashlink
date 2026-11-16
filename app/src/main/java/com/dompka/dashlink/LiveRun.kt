@@ -254,7 +254,8 @@ internal class LiveRun(
 
     /** Runs inside the camera's session. */
     private fun round(host: String): Outcome {
-        val settings = props ?: readProps().also { props = it }
+        // Only a reply is kept: after a failed read the next round asks again.
+        val settings = props ?: readProps()?.also { props = it } ?: emptyMap()
         val paths = Live.candidates(settings)
         val first = preferred?.takeIf { it.first in paths }
         val order = if (first == null) paths else listOf(first.first) + (paths - first.first)
@@ -279,19 +280,57 @@ internal class LiveRun(
         return summary(failed)
     }
 
-    private fun readProps(): Map<String, String> = try {
-        Cam.previewProps().also { p ->
-            // Only the preview settings: a camera that answers with everything it has (as the fake one does)
-            // must not put its Wi-Fi key into the log, even though the report redacts it again.
-            val preview = p.entries.filter { it.key.startsWith("Camera.Preview.", ignoreCase = true) }
-            LiveLog.add("live view settings: " + preview.joinToString { "${it.key.substring("Camera.Preview.".length)}=${it.value}" }.ifEmpty { "none" })
+    /**
+     * The camera's preview settings (which stream it starts with, its keep-alive), or null if it did not say.
+     * Runs inside the camera's session, but the request goes out on a helper thread while this one keeps
+     * calling [turn]: a camera slow to answer must not keep a download waiting or a stop unheard.
+     */
+    private fun readProps(): Map<String, String>? {
+        val c = try {
+            Cam.openRead(Cam.PREVIEW, PROPS_MS)
+        } catch (e: IOException) {
+            LiveLog.add("live view settings could not be read: ${Cam.describe(e)}")
+            return null
         }
-    } catch (e: IOException) {
-        LiveLog.add("live view settings could not be read: ${Cam.describe(e)}")
-        emptyMap()
-    } catch (e: RuntimeException) {
-        LiveLog.add("live view settings could not be read: ${Cam.describe(e)}")
-        emptyMap()
+        val reply = CompletableFuture<String>()
+        val helper = Thread({
+            try {
+                reply.complete(Cam.readText(c))
+            } catch (e: Throwable) {
+                reply.completeExceptionally(e)
+            }
+        }, "live-settings")
+        helper.isDaemon = true
+        helper.start()
+        try {
+            while (true) {
+                turn()
+                val text = try {
+                    reply.get(RtspConnection.POLL_MS, TimeUnit.MILLISECONDS)
+                } catch (e: TimeoutException) {
+                    continue
+                } catch (e: ExecutionException) {
+                    LiveLog.add("live view settings could not be read: ${Cam.describe(e.cause ?: e)}")
+                    return null
+                }
+                val p = try {
+                    Cam.parseProps(text)
+                } catch (e: RuntimeException) {
+                    LiveLog.add("live view settings could not be read: ${Cam.describe(e)}")
+                    return null
+                }
+                // Only the preview settings: a camera that answers with everything it has (as the fake one does)
+                // must not put its Wi-Fi key into the log, even though the report redacts it again.
+                val preview = p.entries.filter { it.key.startsWith("Camera.Preview.", ignoreCase = true) }
+                LiveLog.add("live view settings: " + preview.joinToString { "${it.key.substring("Camera.Preview.".length)}=${it.value}" }.ifEmpty { "none" })
+                return p
+            }
+        } catch (e: Leave) {
+            // Leaving the camera to someone else: the request ends first, so two never overlap.
+            c.disconnect()
+            helper.join(LEAVE_JOIN_MS)
+            throw e
+        }
     }
 
     /** The most useful thing to say when every stream failed. */
@@ -789,6 +828,12 @@ internal class LiveRun(
     private companion object {
         const val BUSY = "camera busy with another request"
         const val CONNECT_MS = 3000
+
+        /** Time-outs of the settings request: a small reply, asked for once per run. */
+        const val PROPS_MS = 3000
+
+        /** How long a request that was cut off may take to end before the camera is handed on. */
+        const val LEAVE_JOIN_MS = 300L
         const val TEARDOWN_MS = 250L
         const val STATUS_MS = 500L
         const val CONTROL_MS = 200L

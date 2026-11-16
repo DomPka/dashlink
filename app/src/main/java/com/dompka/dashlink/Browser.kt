@@ -81,13 +81,25 @@ internal object Browser {
         changed()
     }
 
+    /**
+     * True while the camera's settings or a folder's list are being read (or waited for). A long list holds the
+     * camera for many seconds: thumbnails and the clip player wait for it to finish instead of timing out
+     * behind it and taking that for a broken clip.
+     */
+    @Volatile
+    var listing = false
+        private set
+
     private fun onLinked() {
         background {
             var fresh: Map<String, String> = emptyMap()
+            listing = true
             try {
                 fresh = Cam.parseProps(Cam.get(Cam.INFO))
             } catch (e: Exception) {
                 // The list below reports the problem if the camera is not answering.
+            } finally {
+                listing = false
             }
             ui.post {
                 info = fresh
@@ -123,7 +135,8 @@ internal object Browser {
         }
         changed()
         background {
-            val listing = try {
+            listing = true
+            val result = try {
                 Cam.listAll(name, rearNow, { g == gen.get() }) { n ->
                     ui.post {
                         if (g == gen.get()) {
@@ -134,7 +147,10 @@ internal object Browser {
                 }
             } catch (t: Throwable) {
                 Cam.Listing(emptyList(), Cam.describe(t), false)
+            } finally {
+                listing = false
             }
+            val listing = result
             ui.post {
                 if (g != gen.get()) return@post
                 clips = listing.clips

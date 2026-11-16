@@ -262,8 +262,19 @@ object Cam {
 
     /** Throws [BusyException] if the camera is still busy with something else after [waitMs]. */
     fun get(pathAndQuery: String, timeoutMs: Int = 8000, waitMs: Long = FOREVER): String = exclusive(waitMs) {
-        val c = open(pathAndQuery, timeoutMs)
-        try {
+        readText(open(pathAndQuery, timeoutMs))
+    }
+
+    /**
+     * A read request, not connected yet, for a caller that already holds the camera's turn and has the request
+     * carried out on a helper thread (so that it can go on listening for others meanwhile): the live view.
+     * The read-only guard applies as for every request. Hand it to [readText].
+     */
+    internal fun openRead(pathAndQuery: String, timeoutMs: Int): HttpURLConnection = open(pathAndQuery, timeoutMs)
+
+    /** The text reply of [c] with [get]'s checks (200, size limit); disconnects it. */
+    internal fun readText(c: HttpURLConnection): String {
+        return try {
             val code = c.responseCode
             if (code != 200) throw HttpException(code)
             val out = ByteArrayOutputStream()

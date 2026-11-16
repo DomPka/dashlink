@@ -244,7 +244,7 @@ class PlayerActivity : Activity() {
         if (!started || player != null || file != null) return
         when {
             !Link.ready -> enter(Show.LOST)
-            downloadBusy() -> enter(Show.BUSY)
+            cameraBusy() -> enter(Show.BUSY)
             photo -> if (photoShown) enter(Show.READY) else openPhoto()
             else -> openVideo()
         }
@@ -374,6 +374,9 @@ class PlayerActivity : Activity() {
         }
     }
 
+    /** Someone else needs the camera for a while: a download, or a list of clips being read (see [Browser.listing]). */
+    private fun cameraBusy(): Boolean = downloadBusy() || Browser.listing
+
     private fun downloadBusy(): Boolean =
         DownloadService.working || (askedAt > 0 && SystemClock.uptimeMillis() - askedAt < START_GRACE_MS && Jobs.hasWork())
 
@@ -453,7 +456,11 @@ class PlayerActivity : Activity() {
         val ready = s == Show.READY
         errorBox.visibility = if (s == Show.ERROR) View.VISIBLE else View.GONE
         noticeBox.visibility = if (s == Show.BUSY || s == Show.LOST) View.VISIBLE else View.GONE
-        if (s == Show.BUSY) notice(R.drawable.ic_download, td.warnText, LiveSurface.DOWNLOAD_BUSY, "The clip plays when the download is done.")
+        if (s == Show.BUSY && downloadBusy()) {
+            notice(R.drawable.ic_download, td.warnText, LiveSurface.DOWNLOAD_BUSY, "The clip plays when the download is done.")
+        } else if (s == Show.BUSY) {
+            notice(R.drawable.ic_camera, td.warnText, "Waiting for the camera", "It is reading a list of clips; this one plays right after.")
+        }
         if (s == Show.LOST) notice(R.drawable.ic_lens_off, td.errorText, "Lost the camera", "The clip plays again when the camera is back.")
         for (v in listOf(seek, back10, fwd10)) Glass.setEnabledLook(v, ready)
         Glass.setEnabledLook(play, ready || s == Show.ERROR)
@@ -537,11 +544,11 @@ class PlayerActivity : Activity() {
     private fun slowTick() {
         renderStrip()
         when (show) {
-            Show.OPENING, Show.READY -> if (downloadBusy() && (player != null || file != null)) {
+            Show.OPENING, Show.READY -> if (cameraBusy() && (player != null || file != null)) {
                 release()
                 enter(Show.BUSY)
             }
-            Show.BUSY -> if (!downloadBusy()) open()
+            Show.BUSY -> if (!cameraBusy()) open()
             Show.LOST -> if (Link.ready) open()
             Show.ERROR -> Unit
         }

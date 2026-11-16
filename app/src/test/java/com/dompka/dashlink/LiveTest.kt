@@ -55,6 +55,27 @@ class LiveTest {
         assertTrue("the Wi-Fi key stays out of the log: ${Live.log()}", Live.log().none { it.contains("hunter2secret") || it.contains("CryptoKey") })
     }
 
+    @Test(timeout = 20_000)
+    fun aCameraSlowToAnswerItsSettings_keepsNobodyWaiting_andAStopIsHeard() {
+        val h = live("Camera.Preview.RTSP.av=4\n")
+        h.h264()
+        val cam = h.cam!!
+        cam.tweak = { r, reply -> if (r.query["action"] == "get") reply.stallMs = 3000 }
+        val settings = { cam.requests.count { it.query["action"] == "get" } }
+        h.start()
+        h.await("the settings request") { settings() >= 1 }
+        val t0 = System.currentTimeMillis()
+        Cam.session { }
+        val waited = System.currentTimeMillis() - t0
+        assertTrue("a request queued meanwhile got the camera after $waited ms", waited < 1000)
+        // Nothing was kept from the cut-off read: the next round asks again, and a stop is heard while it waits.
+        h.await("the settings asked for again", 8000) { settings() >= 2 }
+        val took = h.stop()
+        assertTrue("stopped in $took ms", took < 500)
+        // (cam.maxActive is not checked here: the fake only notices that the phone hung up on a stalled request
+        // when the stall ends, so it counts that request as still going.)
+    }
+
     @Test(timeout = 15_000)
     fun withoutSettings_av4First_andTheLogSaysWhy() {
         val h = live()
