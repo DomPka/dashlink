@@ -3,7 +3,8 @@
 A small Android app that downloads clips from a Mio MiVue dashcam over Wi-Fi **without taking over the
 phone's main Wi-Fi** — so wireless Android Auto can stay connected while it works.
 
-Status: v0.3, written from the protocol used by MiVue Pro 1.1.233.1. **Not yet tested against a camera or in a
+Status: v0.4, written from the protocol used by MiVue Pro 1.1.233.1 and, for the live view, from what is
+published about cameras with the same firmware family. **Not yet tested against a camera or in a
 car.** Everything that can be tested without one is tested on every build (see [Tests](#tests)); what cannot
 is listed under [Not covered by any test](#not-covered-by-any-test).
 
@@ -20,9 +21,19 @@ is listed under [Not covered by any test](#not-covered-by-any-test).
   from the Gallery until it is complete; there is never a second copy.
 - Remembers the queue: clips that were queued when Android stopped the app are still queued, and continue from
   where they were, the next time the camera is connected.
-- Read-only: it never changes camera settings, deletes files or formats the card. The only requests it can
-  send are `action=get`, `action=dir`, `action=reardir` and plain file downloads; anything else is refused
-  inside the app before it reaches the network.
+- Shows what the camera sees, live: a small picture on the main screen and a full-screen viewer. The app has
+  its own small RTSP client (H.264 or Motion-JPEG over RTP, TCP first, UDP if the camera wants it), because
+  Android's own player cannot be told to use the camera's Wi-Fi link instead of the phone's main one.
+- Plays clips straight from the camera's SD card, with seeking, and shows a small picture of each clip in the
+  list. Both read the clip in pieces (HTTP `Range`), so nothing is saved until Download is tapped.
+- Shares the camera fairly: one request at a time, downloads and file lists first. The live picture gives
+  the camera up the moment anything else asks for it and comes back by itself; it never touches the camera
+  while a download runs, and neither do the clip previews.
+- Read-only: it never changes camera settings, deletes files or formats the card. The only HTTP requests it
+  can send are `action=get`, `action=dir`, `action=reardir` and plain file downloads. The live view adds only
+  the RTSP requests that read a stream (`OPTIONS`, `DESCRIBE`, `SETUP`, `PLAY`, `GET_PARAMETER`, `TEARDOWN`),
+  and only for the camera's stream paths `/liveRTSP/av1`-`av9` and `/liveRTSP/v1`-`v9`. Anything else is
+  refused inside the app before it reaches the network.
 
 ## Build
 
@@ -63,7 +74,15 @@ Stop cancels everything that is queued and deletes what was half-downloaded.
 - one request to the camera at a time, and nothing but reads ever sent;
 - the rules of the Wi-Fi link: refusals, time-out, drop and reconnect, no retry loop, no leaked request,
   the camera's address when the DHCP server or gateway is missing;
-- the download queue: link drop, 404, phone full, Stop, saved and restored queue.
+- the download queue: link drop, 404, phone full, Stop, saved and restored queue;
+- the live view against a fake RTSP server (`FakeRtsp`): H.264 split every way RFC 6184 allows (single
+  packets, STAP-A, FU-A), Motion-JPEG rebuilt per RFC 2435 and checked pixel by pixel, lost, repeated and
+  late packets, TCP and the UDP fallback, keep-alive, stream paths that do not exist, a camera that wants a
+  password, hostile stream descriptions, giving the camera up to a download within a fraction of a second
+  and coming back, Stop from every state, and that nothing but the six reading requests is ever sent;
+- reading a clip in pieces (`RemoteFile`): random reads anywhere, the way Android's player reads a clip
+  (start, index at the end, then straight through) in three requests, read-ahead, a camera that ignores
+  the end of a range or `Range` altogether, replies that are not what was asked for, cuts, stalls, close.
 
 `./gradlew connectedDebugAndroidTest` — on an emulator or phone. CI runs them on two emulators: API 34
 (Android 14) and API 36 (Android 16). The real app, service and MediaStore, with `FakeCam` as the camera and a
@@ -95,14 +114,26 @@ No camera and no car were available. These need the real thing:
   "low latency" lock, which only counts while the app is on screen, so a download in the background may be slower;
 - Android refusing to start the download service: the refusal is caught and shown on the screen, but nothing
   on an emulator provokes it reliably;
-- transfer speed, and how the camera copes with being asked for many large files in a row.
+- transfer speed, and how the camera copes with being asked for many large files in a row;
+- everything about the camera's live stream: which of `av1`-`av4` / `v1`-`v3` exist and which is front or
+  rear, whether it streams over TCP or only UDP, what its stream description looks like, how long it waits
+  between key frames (the app waits 6 s for the first picture), whether it keeps recording and answering file
+  requests while it streams, and whether `Camera.Preview.RTSP.av` and `.keepalive` mean what the app assumes;
+- whether the camera honours a range with an end (`bytes=a-b`), and where its clips keep their index (at the
+  start or the end of the file): that decides how quickly a clip starts playing and a thumbnail appears;
+- how long a thumbnail takes over the camera's Wi-Fi, and whether the camera has a faster way to give one
+  (the app makes them on the phone from the clip itself).
 
 The Diagnostics report is built for exactly this: it says what the phone supports, what the link and the queue
 did, why Android last stopped the app, and what the camera answered — without the Wi-Fi password.
 
 ## Code map
 
-- `Cam.kt` — the camera's HTTP interface: info, file list, resumable file download. No Android classes.
+- `Cam.kt` — the camera's HTTP interface: info, file list, resumable file download, the one-request-at-a-time
+  gate. No Android classes.
+- `Live.kt`, `LiveRun.kt`, `Rtsp.kt`, `Rtp.kt`, `Jpeg.kt` — the live view: RTSP client, RTP depacketizers
+  (H.264, Motion-JPEG), the loop that finds a stream, keeps it alive and gives the camera up. No Android classes.
+- `RemoteFile.kt` — a clip on the camera read in pieces over HTTP `Range`, for playback and thumbnails.
 - `LinkCore.kt` — the rules of the second Wi-Fi link (ask, retry, give up, camera address). No Android classes.
 - `Link.kt` — the Android side of the link: `WifiNetworkSpecifier` requests and callbacks.
 - `Jobs.kt`, `Runner.kt` — the download queue and what happens to one clip (wait, resume, give up).
@@ -111,4 +142,6 @@ did, why Android last stopped the app, and what the camera answered — without 
 - `Browser.kt`, `MainActivity.kt` — the file list and the single screen (built in code from platform widgets;
   colours, shapes and icons are in `res/`). On a wide screen it shows two columns.
 - `Power.kt`, `Report.kt`, `Diag.kt`, `App.kt` — battery optimisation, the Diagnostics report, last-crash note.
-- `app/src/sharedTest` — `FakeCam`, used by both kinds of test.
+- `Tokens.kt`, `Glass.kt`, `Type.kt`, `Drawables.kt` — the look ("Lens Glass"): colours from the wallpaper
+  (Material You) with fixed signal colours, frosted-glass surfaces, type styles and the drawn details.
+- `app/src/sharedTest` — `FakeCam` and `FakeRtsp`, used by both kinds of test.
