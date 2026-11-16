@@ -176,6 +176,7 @@ class LiveTileTest {
             Kit.until("a new attempt right after Try again", 5000) { attempts.get() > before }
             Kit.until("the tile to say so again") { Kit.textOf("live_state") == "Live view not available" }
             assertTrue("it still offers to try again", Kit.textOf("live_retry") == "Try again")
+            assertOnlyReads()
         }
     }
 
