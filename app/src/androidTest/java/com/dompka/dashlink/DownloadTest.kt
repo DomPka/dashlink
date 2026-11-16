@@ -18,21 +18,28 @@ import org.junit.runner.RunWith
 /**
  * The download service on a real Android: foreground service, wake lock, MediaStore. The camera is
  * FakeCam on 127.0.0.1 and the Wi-Fi link is FakeRadio; everything between those two is the real app.
+ *
+ * Whenever the camera is connected, the main screen also asks it for its live-view settings and reads the
+ * listed clips' first bytes for thumbnails. So requests are counted as downloads ([FakeCam.downloads]), and
+ * a test that cuts or slows a transfer does it to downloads only.
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadTest {
     private lateinit var cam: FakeCam
     private lateinit var radio: FakeRadio
+    private lateinit var globals: Kit.Globals
     private val tag = System.nanoTime().toString()
 
     @Before
     fun setUp() {
         Kit.prepare()
         Kit.grantAll()
+        globals = Kit.Globals()
         cam = FakeCam()
         radio = FakeRadio()
         Cam.opener = cam.opener()
         Cam.downloadTimeoutMs = 5000
+        Live.sockets = Kit.noLiveStream
         Kit.onMain { Link.radio = radio }
     }
 
@@ -45,6 +52,7 @@ class DownloadTest {
         } finally {
             cam.close()
             Kit.deleteStored(tag)
+            globals.restore()
         }
     }
 
@@ -103,9 +111,11 @@ class DownloadTest {
     fun service_stoppedFromOutside_releasesItsLocks_andKeepsTheClip() {
         val a = name("A")
         cam.addFile("Normal", a, 12_000_000)
-        cam.tweak = { _, reply ->
-            reply.chunk = 20_000
-            reply.chunkDelayMs = 40                         // about 24 seconds: long enough to be stopped half-way
+        cam.tweak = { req, reply ->
+            if (req.download) {
+                reply.chunk = 20_000
+                reply.chunkDelayMs = 40                     // about 24 seconds: long enough to be stopped half-way
+            }
         }
         connect()
         Kit.launch().use {
@@ -150,8 +160,8 @@ class DownloadTest {
             }
             Kit.until("the list to be loaded") { Kit.text("note").contains("Normal: 3 files") }
 
-            Kit.tapText(".*${Regex.escape(a)}.*")
-            Kit.tapText(".*${Regex.escape(b)}.*")
+            Kit.clip(a).click()
+            Kit.clip(b).click()
             Kit.tap("download")
             waitSaved(a)
             waitSaved(b)
@@ -174,15 +184,15 @@ class DownloadTest {
         val a = name("A")
         val data = cam.addFile("Normal", a, 900_000)
         var cuts = 2
-        cam.tweak = { req, reply -> if ('?' !in req.target && cuts-- > 0) reply.cutAfter = 250_000 }
+        cam.tweak = { req, reply -> if (req.download && cuts-- > 0) reply.cutAfter = 250_000 }
         connect()
         Kit.launch().use {
             assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
             Kit.until("it to wait for the camera after the cut") { job(a)?.state == Jobs.WAITING }
             waitSaved(a)
             assertArrayEquals(data, Kit.bytes(published(a).uri))
-            assertEquals(3, cam.fileRequests().size)
-            assertTrue(cam.fileRequests()[1].rangeStart > 0)
+            assertEquals(3, cam.downloads().size)
+            assertTrue(cam.downloads()[1].rangeStart > 0)
             assertServiceGone()
         }
     }
@@ -193,7 +203,7 @@ class DownloadTest {
         val data = cam.addFile("Normal", a, 600_000)
         cam.supportsRange = false
         var cuts = 1
-        cam.tweak = { req, reply -> if ('?' !in req.target && cuts-- > 0) reply.cutAfter = 200_000 }
+        cam.tweak = { req, reply -> if (req.download && cuts-- > 0) reply.cutAfter = 200_000 }
         connect()
         Kit.launch().use {
             assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
@@ -207,9 +217,11 @@ class DownloadTest {
     fun wifiDropsDuringDownload_reconnects_andFinishes() {
         val a = name("A")
         val data = cam.addFile("Normal", a, 6_000_000)
-        cam.tweak = { _, reply ->
-            reply.chunk = 20_000
-            reply.chunkDelayMs = 40
+        cam.tweak = { req, reply ->
+            if (req.download) {
+                reply.chunk = 20_000
+                reply.chunkDelayMs = 40
+            }
         }
         connect()
         Kit.launch().use {
@@ -250,9 +262,11 @@ class DownloadTest {
         val b = name("B")
         cam.addFile("Normal", a, 12_000_000)
         cam.addFile("Normal", b, 1000)
-        cam.tweak = { _, reply ->
-            reply.chunk = 20_000
-            reply.chunkDelayMs = 40
+        cam.tweak = { req, reply ->
+            if (req.download) {
+                reply.chunk = 20_000
+                reply.chunkDelayMs = 40
+            }
         }
         connect()
         Kit.launch().use {
@@ -279,12 +293,12 @@ class DownloadTest {
             assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
             waitSaved(a)
             assertServiceGone()
-            val requests = cam.fileRequests().size
+            val requests = cam.downloads().size
 
             // The very same clip again: it is already on the phone.
             assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
             Kit.until("the second job to finish") { Jobs.all.count { it.clip.name == a && it.state == Jobs.SAVED } == 2 }
-            assertEquals("not downloaded again", requests, cam.fileRequests().size)
+            assertEquals("not downloaded again", requests, cam.downloads().size)
             assertEquals("not stored again", 1, Kit.stored(tag).size)
             assertServiceGone()
 
@@ -329,7 +343,7 @@ class DownloadTest {
             waitSaved(a)
             assertServiceGone()
             val file = published(a)
-            val requests = cam.fileRequests().size
+            val requests = cam.downloads().size
 
             // What a new process finds if Android killed the old one between making the clip visible and
             // writing that down: the clip still queued, still pointing at the (now finished) file.
@@ -340,7 +354,7 @@ class DownloadTest {
             Kit.until("the restored job to be recognised as done") { again.state == Jobs.SAVED }
             assertNull(again.dest)
             assertServiceGone()
-            assertEquals("not fetched again", requests, cam.fileRequests().size)
+            assertEquals("not fetched again", requests, cam.downloads().size)
             val still = Kit.stored(tag)
             assertEquals("the finished clip was neither deleted nor doubled", listOf(file.uri), still.map { it.uri })
             assertFalse(still.single().pending)
@@ -361,7 +375,7 @@ class DownloadTest {
         // First life: the link drops with part of A on the phone and B still queued.
         var first = true
         cam.tweak = { req, reply ->
-            if ('?' !in req.target) {
+            if (req.download) {
                 reply.cutAfter = if (first) 300_000 else 0
                 first = false
             }
@@ -405,7 +419,7 @@ class DownloadTest {
             waitSaved(b)
             assertArrayEquals(dataA, Kit.bytes(published(a).uri))
             assertArrayEquals(dataB, Kit.bytes(published(b).uri))
-            assertEquals("A was continued, not started over", had.toLong(), cam.fileRequests().first().rangeStart)
+            assertEquals("A was continued, not started over", had.toLong(), cam.downloads().first().rangeStart)
             assertEquals("no stray files", 2, Kit.stored(tag).size)
             assertFalse(Jobs.interrupted)
             assertServiceGone()

@@ -81,6 +81,13 @@ class FakeCam : Closeable {
         /** M from "Range: bytes=N-M", or -1 when the range is open-ended or there is none. */
         val rangeEnd: Long
             get() = headers["range"]?.substringAfter("bytes=", "")?.substringAfter('-', "")?.trim()?.toLongOrNull() ?: -1L
+
+        /**
+         * A file asked for to its end (no Range, or "bytes=N-"), as a download asks for it. Thumbnails read a clip in
+         * pieces and always name the last byte they want, so they are not downloads.
+         */
+        val download: Boolean
+            get() = '?' !in target && rangeEnd < 0
     }
 
     class Reply(var status: Int, var body: ByteArray = ByteArray(0)) {
@@ -188,6 +195,9 @@ class FakeCam : Closeable {
     }
 
     fun fileRequests(): List<Request> = requests.filter { '?' !in it.target }
+
+    /** The requests that were downloads ([Request.download]), in order: file requests without the thumbnails' reads. */
+    fun downloads(): List<Request> = requests.filter { it.download }
 
     /** Kills every transfer that is under way right now, the way a vanished Wi-Fi link does. */
     fun hangUp() {
