@@ -408,31 +408,39 @@ class MainActivity : Activity() {
         decorations()
     }
 
-    /** Puts the columns where the width of the screen wants them. Cheap when nothing changed. */
+    /**
+     * Puts the columns where the width of the screen wants them. Cheap when nothing changed. The two columns stay
+     * where they are and only change shape: taking column A out would take the live picture's surface away and
+     * restart the stream, and taking the list out would lose its place.
+     */
     private fun arrange() {
         val nowWide = resources.configuration.screenWidthDp >= 600
         if (nowWide == wide) return
         wide = nowWide
         (bottom.parent as? ViewGroup)?.removeView(bottom)
-        root.removeAllViews()
+        root.removeView(lane)
+        if (colA.parent == null) {
+            root.addView(colA)
+            root.addView(colB)
+        }
         if (nowWide) {
             root.orientation = LinearLayout.HORIZONTAL
+            colA.layoutParams = LinearLayout.LayoutParams(0, match, 2f)
             topScroll.share = 1f
             topScroll.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
             bottom.background = Glass.panel(this, floating = true)
             colA.addView(bottom, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dpi(12f) })
-            root.addView(colA, LinearLayout.LayoutParams(0, match, 2f))
-            root.addView(lane, LinearLayout.LayoutParams(dpi(16f), match))
-            root.addView(colB, LinearLayout.LayoutParams(0, match, 3f))
+            root.addView(lane, 1, LinearLayout.LayoutParams(dpi(16f), match))
+            colB.layoutParams = LinearLayout.LayoutParams(0, match, 3f)
             // The list column starts a little lower, level with the link card rather than with the heading.
             colB.setPadding(0, dpi(16f), 0, 0)
         } else {
             root.orientation = LinearLayout.VERTICAL
+            colA.layoutParams = LinearLayout.LayoutParams(match, wrap)
             topScroll.share = 0.55f
             topScroll.layoutParams = LinearLayout.LayoutParams(match, wrap)
             bottom.background = Glass.panel(this, floating = false)
-            root.addView(colA, LinearLayout.LayoutParams(match, wrap))
-            root.addView(colB, LinearLayout.LayoutParams(match, 0, 1f))
+            colB.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
             colB.setPadding(0, 0, 0, 0)
             frame.addView(bottom, FrameLayout.LayoutParams(match, wrap, Gravity.BOTTOM))
         }
@@ -831,36 +839,40 @@ class MainActivity : Activity() {
 
     /**
      * The tile's two shapes (5.8). Phone: the picture at most 176dp wide on the left, title, readout and button in a
-     * column on the right. Wide: the picture across the whole card, the rest in a row under it.
+     * column on the right. Wide: the picture across the whole card, the rest in a row under it. The picture is first
+     * either way and is never taken out, so its surface, and the stream on it, live through the change.
      */
     private fun arrangeTile(wide: Boolean) {
-        tile.removeAllViews()
+        if (video.parent == null) {
+            tile.addView(video)
+            tile.addView(liveInfo)
+        }
         liveInfo.removeAllViews()
         if (wide) {
             tile.orientation = LinearLayout.VERTICAL
             liveReason.maxLines = 2
             video.maxWidthPx = 0
             video.reservePx = 0
-            tile.addView(video, LinearLayout.LayoutParams(match, wrap))
+            video.layoutParams = LinearLayout.LayoutParams(match, wrap)
             liveInfo.orientation = LinearLayout.HORIZONTAL
             liveInfo.gravity = Gravity.CENTER_VERTICAL
             liveInfo.addView(liveTexts, LinearLayout.LayoutParams(0, wrap, 1f))
             liveInfo.addView(liveRetry, LinearLayout.LayoutParams(wrap, dpi(48f)).apply { marginStart = dpi(8f) })
             liveInfo.addView(liveOpen, LinearLayout.LayoutParams(wrap, dpi(48f)).apply { marginStart = dpi(8f) })
-            tile.addView(liveInfo, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dpi(8f) })
+            liveInfo.layoutParams = LinearLayout.LayoutParams(match, wrap).apply { topMargin = dpi(8f) }
         } else {
             tile.orientation = LinearLayout.HORIZONTAL
             liveReason.maxLines = 1               // the picture is only 99dp high here
             video.maxWidthPx = dpi(176f)
             video.reservePx = dpi(128f)              // the 12dp gap and at least 116dp for the column beside it
-            tile.addView(video, LinearLayout.LayoutParams(wrap, wrap))
+            video.layoutParams = LinearLayout.LayoutParams(wrap, wrap)
             liveInfo.orientation = LinearLayout.VERTICAL
             liveInfo.gravity = Gravity.START
             liveInfo.addView(liveTexts, LinearLayout.LayoutParams(match, wrap))
             liveInfo.addView(liveSpacer, LinearLayout.LayoutParams(0, 0, 1f))
             liveInfo.addView(liveRetry, LinearLayout.LayoutParams(wrap, dpi(48f)))
             liveInfo.addView(liveOpen, LinearLayout.LayoutParams(wrap, dpi(48f)))
-            tile.addView(liveInfo, LinearLayout.LayoutParams(0, match, 1f).apply { marginStart = dpi(12f) })
+            liveInfo.layoutParams = LinearLayout.LayoutParams(0, match, 1f).apply { marginStart = dpi(12f) }
         }
     }
 
