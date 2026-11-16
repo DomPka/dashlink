@@ -40,7 +40,7 @@ class ScreenshotTest {
     /** One real clip per light of day; null when this phone could not make them (the rows then keep their placeholders). */
     private val clips: List<ByteArray>? by lazy {
         try {
-            listOf(Pictures.Light.DUSK, Pictures.Light.DAY, Pictures.Light.NIGHT).map { Pictures.mp4(Pictures.road(640, 352, it)) }
+            listOf(FakePictures.Light.DUSK, FakePictures.Light.DAY, FakePictures.Light.NIGHT).map { FakePictures.mp4(FakePictures.road(640, 352, it)) }
         } catch (e: Exception) {
             Log.w("ScreenshotTest", "no clips for thumbnails: ${Cam.describe(e)}")
             null
@@ -54,7 +54,7 @@ class ScreenshotTest {
         cam = FakeCam()
         cam.override = { req -> padded[req.path]?.let { (head, size) -> slice(req, head, size) } }
         rtsp = FakeRtsp()
-        rtsp.streams["/liveRTSP/av4"] = Pictures.stream(Pictures.roadAtDusk())
+        rtsp.streams["/liveRTSP/av4"] = FakePictures.stream(FakePictures.roadAtDusk())
         radio = FakeRadio()
         Cam.opener = cam.opener()
         Cam.downloadTimeoutMs = 5000
@@ -99,7 +99,7 @@ class ScreenshotTest {
             entry("/SD/Normal/F/${name(i)}", mb * 1_048_576L, "2026-03-01 10:%02d:00".format(i), "60", clip = i)
         }
         val newest = "/SD/Normal/F/${name(8)}"
-        val content = clips?.let { Pictures.padded(it[0], 24 * 1_048_576) }
+        val content = clips?.let { FakePictures.padded(it[0], 24 * 1_048_576) }
             ?: ByteArray(24 * 1_048_576).also { Random(8).nextBytes(it) }
         cam.files[newest] = content
         cam.folders["Normal"] = older + FakeCam.Entry(newest, content.size.toLong(), "2026-03-01 10:08:00", "2560x1440", "60")
@@ -118,7 +118,7 @@ class ScreenshotTest {
     private fun entry(path: String, size: Long, time: String, secs: String, clip: Int): FakeCam.Entry {
         clips?.let { all ->
             val head = all[clip % all.size]
-            padded[path] = (head + Pictures.freeBox(size - head.size)) to size
+            padded[path] = (head + FakePictures.freeBox(size - head.size)) to size
         }
         return FakeCam.Entry(path, size, time, "2560x1440", secs)
     }

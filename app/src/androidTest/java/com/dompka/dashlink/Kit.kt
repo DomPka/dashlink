@@ -606,7 +606,7 @@ internal class FakeRadio : LinkCore.Radio {
  * receiver always rebuilds the standard tables of JPEG Annex K. So the scan is decoded with the picture's own tables
  * and written again with the standard ones, code by code. The coefficients, and so the picture, stay the same.
  */
-internal object Pictures {
+internal object FakePictures {
     /** One picture as RFC 2435 carries it. [type] 1 is 4:2:0, 0 is 4:2:2. */
     class Mjpeg(val scan: ByteArray, val tables: ByteArray, val type: Int, val width: Int, val height: Int) {
         /** The picture as FakeRtsp sends it at [time] (90 kHz), with Q 255: the tables travel with every picture. */

@@ -39,7 +39,7 @@ class LiveTileTest {
         cam.folders["Normal"] = emptyList()                 // a card with nothing on it yet, unless a test adds clips
         rtsp = FakeRtsp()
         // The stream the app tries first when the camera's settings name none.
-        rtsp.streams["/liveRTSP/av4"] = Pictures.stream(Pictures.roadAtDusk())
+        rtsp.streams["/liveRTSP/av4"] = FakePictures.stream(FakePictures.roadAtDusk())
         radio = FakeRadio()
         Cam.opener = cam.opener()
         Cam.downloadTimeoutMs = 5000
