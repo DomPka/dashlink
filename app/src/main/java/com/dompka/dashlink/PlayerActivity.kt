@@ -570,6 +570,7 @@ class PlayerActivity : Activity() {
         if (note != null) stripNote.text = note
         if (job == null || !active) return
         progressTitle.text = when (job.state) {
+            Jobs.QUEUED -> "Queued…"
             Jobs.WAITING -> "Waiting for the camera…"
             Jobs.SAVING -> "Saving…"
             else -> "Downloading…"
@@ -727,7 +728,8 @@ class PlayerActivity : Activity() {
         f.contentDescription = if (photo) "Photo" else "Video. Tap to play or pause."
         Glass.clipTo(f, Corners.VIDEO)
         Glass.elevate(f, 2f)
-        f.setOnClickListener { if (!photo) togglePlay() }
+        // A photo has nothing to play: its frame is not offered as a button.
+        if (!photo) f.setOnClickListener { togglePlay() }
         video = TextureView(this)
         video.id = R.id.player_video
         video.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -1049,7 +1051,8 @@ class PlayerActivity : Activity() {
         progressBox.addView(road, LinearLayout.LayoutParams(match, dpi(8f)).apply { topMargin = dpi(10f) })
         val stop = MediaChrome.button(this, "Stop", R.id.player_stop, Glass.buttonTonal(this), t.text1)
         stop.setOnClickListener {
-            DownloadService.stopAll(this)
+            // This clip only: the strip shows this clip's download, and other queued clips are not its business.
+            DownloadService.stop(this, clip.path)
             askedAt = 0
             renderStrip()
         }

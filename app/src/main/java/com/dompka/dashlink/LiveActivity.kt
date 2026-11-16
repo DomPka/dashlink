@@ -390,6 +390,10 @@ class LiveActivity : Activity() {
         val upright = resources.configuration.orientation == Configuration.ORIENTATION_PORTRAIT
         if (upright == portrait) return
         portrait = upright
+        // Only sideways does a tap on the picture do something (show or hide the controls): upright it is just a
+        // picture, and a screen reader must not offer it as a button.
+        surface.isClickable = !upright
+        surface.contentDescription = if (upright) "Live picture from the camera" else "Live picture from the camera. Tap to show or hide the controls."
         for (v in listOf(close, chip, readout, card, info)) (v.parent as? ViewGroup)?.removeView(v)
         root.removeView(bar)
         bar.removeAllViews()

@@ -12,6 +12,7 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
+import android.os.Build
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -292,6 +293,9 @@ internal object Glass {
             override fun getOutline(v: View, outline: Outline) {
                 if (v.width == 0 || v.height == 0) return
                 if (corners.isUniform) {
+                    outline.setRoundRect(0, 0, v.width, v.height, radii[0])
+                } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                    // A path outline only clips from Android 13: before that, one round radius for every corner.
                     outline.setRoundRect(0, 0, v.width, v.height, radii[0])
                 } else {
                     val path = Path()

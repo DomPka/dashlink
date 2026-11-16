@@ -100,6 +100,19 @@ class DownloadService : Service() {
         }
 
         /** Stops everything. Half-downloaded files are deleted, also those of jobs that never got to run. */
+        /** Stops one clip's download (the player's Stop); the rest of the queue goes on. */
+        fun stop(ctx: Context, path: String) {
+            Jobs.cancel(path)
+            val app = ctx.applicationContext
+            worker.execute {
+                try {
+                    tidy(MediaFiles(app))
+                } catch (t: Throwable) {
+                    // nothing to tidy with; the next run sweeps
+                }
+            }
+        }
+
         fun stopAll(ctx: Context) {
             Jobs.cancelAll()
             val app = ctx.applicationContext

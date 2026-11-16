@@ -107,6 +107,9 @@ class MainActivity : Activity() {
 
     /** When a tap last opened the viewer or the player (see [leaving]). */
     private var openedAt = 0L
+
+    /** When the tile last started streaming (see showLive). */
+    private var liveStartedAt = 0L
     private lateinit var lane: View
     private lateinit var bottom: LinearLayout
     private var wide: Boolean? = null
@@ -921,7 +924,10 @@ class MainActivity : Activity() {
     private fun startLive() {
         if (liveOn) return
         liveOn = true
+        liveStartedAt = SystemClock.uptimeMillis()
         live.start()
+        // After the hand-over grace, show what the tile really has (see showLive).
+        ui.postDelayed({ if (liveOn && !isDestroyed) showLive(live.status) }, HANDOVER_MS)
     }
 
     private fun stopLive() {
@@ -952,7 +958,12 @@ class MainActivity : Activity() {
     }
 
     /** What LiveSurface reports, drawn over and around its picture (5.8). Main thread. */
-    private fun showLive(s: Live.Status) {
+    private fun showLive(reported: Live.Status) {
+        // Back from the viewer or the player, that screen may hold the camera for a moment longer: "busy" then is
+        // only the hand-over, shown as starting. A download is said at once.
+        val handOver = reported.phase == Live.Phase.PAUSED_BUSY && reported.detail != LiveSurface.DOWNLOAD_BUSY &&
+            SystemClock.uptimeMillis() - liveStartedAt < HANDOVER_MS
+        val s = if (handOver) Live.Status(Live.Phase.STARTING, "starting") else reported
         val phase = s.phase
         // Live keeps trying by itself after "not available", briefly "starting" each time; the tile stays as it is meanwhile.
         if (phase == Live.Phase.STARTING && livePhase == Live.Phase.UNAVAILABLE && !retryTapped) return
@@ -2260,6 +2271,9 @@ class MainActivity : Activity() {
 
         /** A second tap on a thumbnail or the tile within this long opens nothing more (see leaving()). */
         const val OPEN_GUARD_MS = 800L
+
+        /** How long "camera busy" right after the tile starts counts as the hand-over from a closing screen. */
+        const val HANDOVER_MS = 2_500L
 
         /** The red of a dot on video (1b); Tokens.liveDot follows light and dark, a picture is always dark. */
         val VIDEO_RED = 0xFFFF5A52.toInt()

@@ -73,6 +73,13 @@ object Jobs {
 
     fun hasWork(): Boolean = next() != null
 
+    /** Tells the unfinished jobs for [path] to stop, and only those. The download thread does the rest. */
+    @Synchronized
+    fun cancel(path: String) {
+        for (j in all) if (isOpen(j) && j.clip.path == path) j.cancel = true
+        save()
+    }
+
     /** Tells every unfinished job to stop. The download thread does the rest. */
     fun cancelAll() {
         for (j in all) if (isOpen(j)) j.cancel = true

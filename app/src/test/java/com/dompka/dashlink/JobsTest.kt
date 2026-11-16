@@ -65,6 +65,18 @@ class JobsTest {
     }
 
     @Test
+    fun cancel_stopsOneClipOnly_andTheQueueGoesOn() {
+        Jobs.add(listOf(clip("A.MP4"), clip("B.MP4"), clip("C.MP4")))
+        Jobs.all[0].state = Jobs.DOWNLOADING
+        Jobs.all[0].dest = "content://media/1"
+        Jobs.all[1].dest = "content://media/2"
+        Jobs.cancel(clip("B.MP4").path)
+        assertEquals(listOf(false, true, false), Jobs.all.map { it.cancel })
+        assertEquals("only B's half-done file is rubbish now", setOf("content://media/1"), Jobs.dests())
+        assertEquals(clip("C.MP4").path, Jobs.next()!!.clip.path)
+    }
+
+    @Test
     fun cancelAll_marksEverythingUnfinished() {
         Jobs.add(listOf(clip("A.MP4"), clip("B.MP4"), clip("C.MP4")))
         Jobs.all[0].state = Jobs.SAVED
