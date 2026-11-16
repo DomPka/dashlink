@@ -3,6 +3,7 @@ package com.dompka.dashlink
 import android.content.Context
 import android.graphics.Bitmap
 import android.widget.FrameLayout
+import java.util.Locale
 
 /*
  * CONTRACT (to be implemented): a live picture from the camera. A FrameLayout holding a TextureView; it runs
@@ -30,4 +31,15 @@ internal class LiveSurface(context: Context) : FrameLayout(context) {
 
     /** The last picture shown, or null (for a frozen "paused" frame). */
     fun snapshot(): Bitmap? = TODO("contract")
+
+    companion object {
+        /** The status detail while a download has the camera: the live view does not touch it then. */
+        const val DOWNLOAD_BUSY = "Camera busy with a download"
+    }
 }
+
+/** "24 fps · 850 kb/s" while playing (plus " · lagging"), "—" otherwise: the same wording on the tile and in the viewer. */
+internal fun Live.Status.readout(): String =
+    if (phase != Live.Phase.PLAYING) "—"
+    else String.format(Locale.US, "%.0f fps · %d kb/s", fps, kbps) + if (lagging) " · lagging" else ""
+
