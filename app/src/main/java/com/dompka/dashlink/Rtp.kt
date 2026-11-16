@@ -321,7 +321,14 @@ internal class H264Depacketizer(
 
     /** Takes note of what a complete NAL unit is. */
     private fun note(buf: ByteArray, offset: Int, length: Int) {
-        when (buf[offset].toInt() and 0x1f) {
+        val type = buf[offset].toInt() and 0x1f
+        if (!hasSlice && (type == 1 || type == 2 || type == 5)) {
+            // A picture's first slice starts at its first macroblock: first_mb_in_slice = 0, which is the single bit
+            // 1 at the start of the slice header. Anything else means the first slice was lost (with a gap that fell
+            // between pictures): that picture would otherwise go out as complete, even as a key frame.
+            if (length < 2 || buf[offset + 1].toInt() and 0x80 == 0) damaged = true
+        }
+        when (type) {
             5 -> {
                 hasIdr = true
                 hasSlice = true

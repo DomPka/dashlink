@@ -52,6 +52,22 @@ class RtpTest {
     // ---------------------------------------------------------------- the three packet types
 
     @Test
+    fun aPictureWhoseFirstSliceWasLost_isNotPassedOn_evenAsAKeyFrame() {
+        val d = h264()
+        unit(d, 0, sps, pps, idr(1))
+        unit(d, 3000, p(2))
+        // A two-slice IDR whose first slice is lost in a gap that falls between the pictures: only the second
+        // slice arrives, with the marker. It does not start at macroblock 0 (first bit of its header is 0).
+        seq++
+        val second = idr(3, 800).also { it[1] = (it[1].toInt() and 0x7f).toByte() }
+        send(d, second, 6000, true)
+        assertEquals("the IDR and the P picture only", listOf(true, false), got.map { it.key })
+        // The next whole IDR plays again.
+        unit(d, 9000, idr(4))
+        assertEquals(listOf(true, false, true), got.map { it.key })
+    }
+
+    @Test
     fun fuA_acrossThreePackets_isOneNalUnit() {
         val d = h264()
         val slice = idr(1, 2500)

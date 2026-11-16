@@ -148,9 +148,10 @@ object Link {
             return s
         }
 
-        override fun udp(): DatagramSocket {
+        override fun udp(port: Int): DatagramSocket {
             val net = network ?: throw IOException("not connected to the camera")
-            val d = DatagramSocket()
+            // Bound to its port first: bindSocket would otherwise bind it to any port itself.
+            val d = DatagramSocket(InetSocketAddress(port))
             try {
                 net.bindSocket(d)
             } catch (e: IOException) {

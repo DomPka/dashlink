@@ -162,7 +162,7 @@ class LiveTileTest {
                 throw ConnectException("Connection refused")
             }
 
-            override fun udp(): DatagramSocket = throw ConnectException("Connection refused")
+            override fun udp(port: Int): DatagramSocket = throw ConnectException("Connection refused")
         }
         Kit.launch().use {
             connectedAndListed()

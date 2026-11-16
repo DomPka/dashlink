@@ -115,7 +115,7 @@ class LiveTest {
                 throw ConnectException("Connection refused")
             }
 
-            override fun udp(): DatagramSocket = throw IOException("not here")
+            override fun udp(port: Int): DatagramSocket = throw IOException("not here")
         }
         h.start()
         h.awaitPhase(Live.Phase.UNAVAILABLE)
@@ -255,6 +255,24 @@ class LiveTest {
     }
 
     @Test(timeout = 15_000)
+    fun picturesThatStopWhilePacketsKeepComing_startTheStreamAgain() {
+        val h = live()
+        val sps = FakeRtsp.sps(640, 360)
+        // One key frame at the start and none after it: a lost packet leaves nothing whole until a new stream.
+        val stream = FakeRtsp.Stream("H264", FakeRtsp.h264(sps = sps, gop = 1_000_000))
+        stream.sps = sps
+        stream.pps = FakeRtsp.PPS
+        h.rtsp.streams["/liveRTSP/av4"] = stream
+        var dropped = false
+        h.rtsp.drop = { i -> if (i == 30 && !dropped) true.also { dropped = true } else false }
+        h.start()
+        h.await("a second stream", 8000) { h.rtsp.requests("PLAY").size >= 2 }
+        val before = h.sink.frames.size
+        h.awaitFrames(before + 10)
+        assertTrue(Live.log().toString(), Live.log().any { it.contains("no picture for") })
+    }
+
+    @Test(timeout = 15_000)
     fun aSinkThatFails_doesNotEndTheRun() {
         val h = live()
         h.h264()
@@ -323,7 +341,7 @@ class LiveTest {
                 return real.tcp(host, port, timeoutMs).also { late.set(it) }
             }
 
-            override fun udp(): DatagramSocket = real.udp()
+            override fun udp(port: Int): DatagramSocket = real.udp(port)
         }
         h.start()
         assertTrue(entered.await(5, TimeUnit.SECONDS))

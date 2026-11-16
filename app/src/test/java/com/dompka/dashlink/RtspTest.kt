@@ -275,6 +275,9 @@ class RtspTest {
         assertEquals(2, setups.size)
         assertEquals("RTP/AVP/TCP;unicast;interleaved=0-1", setups[0].headers["transport"])
         assertTrue(setups[1].headers["transport"]!!.matches(Regex("RTP/AVP;unicast;client_port=\\d+-\\d+")))
+        // RFC 3550: RTP on an even port, RTCP on the next one.
+        val (rtp, rtcp) = h.rtsp.clientPorts.single().split('-').map { it.toInt() }
+        assertTrue("client_port=$rtp-$rtcp", rtp % 2 == 0 && rtcp == rtp + 1)
         assertTrue(Live.log().any { it.endsWith("av4 TCP: SETUP 461, trying UDP") })
         val f = h.sink.frames
         assertTrue(f.first().key)

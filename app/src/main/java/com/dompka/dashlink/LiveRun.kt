@@ -391,6 +391,7 @@ internal class LiveRun(
         private var meter = Meter(0)
         private var started = 0L
         private var lastPacket = 0L
+        private var lastPicture = 0L
         private var triedBoth = false
         private val tag get() = "$name ${transport(tcp)}"
 
@@ -505,16 +506,41 @@ internal class LiveRun(
             val transport = if (tcp) {
                 "RTP/AVP/TCP;unicast;interleaved=$channel-${channel + 1}"
             } else {
-                val rtp = udpSocket()
-                val rtcp = udpSocket()
+                val (rtp, rtcp) = udpPair()
                 "RTP/AVP;unicast;client_port=${rtp.localPort}-${rtcp.localPort}"
             }
             return c.call("SETUP", control, listOf("Transport" to transport), LiveTiming.replyMs, turn)
         }
 
-        private fun udpSocket(): DatagramSocket {
-            val s = Live.sockets.udp()
-            udp.add(s)
+        /**
+         * The sockets for RTP and RTCP, kept in [udp] in that order: RTP on an even port and RTCP on the next one,
+         * as RFC 3550 asks (some servers work one out from the other). Any two ports if no such pair can be had.
+         */
+        private fun udpPair(): Pair<DatagramSocket, DatagramSocket> {
+            repeat(PAIR_TRIES) {
+                val first = udpSocket(0)
+                val port = first.localPort
+                val neighbour = if (port % 2 == 0) port + 1 else port - 1
+                val second = try {
+                    if (neighbour in 1024..65535) udpSocket(neighbour) else null
+                } catch (e: IOException) {
+                    null                                            // taken: try another pair
+                }
+                if (second != null) {
+                    val pair = if (port % 2 == 0) first to second else second to first
+                    udp.add(pair.first)
+                    udp.add(pair.second)
+                    return pair
+                }
+                first.close()
+            }
+            val rtp = udpSocket(0).also { udp.add(it) }
+            val rtcp = udpSocket(0).also { udp.add(it) }
+            return rtp to rtcp
+        }
+
+        private fun udpSocket(port: Int): DatagramSocket {
+            val s = Live.sockets.udp(port)
             s.soTimeout = RtspConnection.POLL_MS.toInt()
             try {
                 s.receiveBufferSize = 1024 * 1024                 // a key frame arrives as a burst of packets
@@ -596,6 +622,7 @@ internal class LiveRun(
                 report(Live.Phase.PLAYING, what, path, transport(tcp))
             }
             meter.picture(ptsUs, took, now)
+            lastPicture = now
         }
 
         private fun stream(c: RtspConnection): Result {
@@ -650,6 +677,10 @@ internal class LiveRun(
                     if (started == 0L) return result(Kind.NO_PICTURE, "no data for ${seconds(LiveTiming.silenceMs)}", "no picture")
                     return ended("no data for ${seconds(LiveTiming.silenceMs)}")
                 }
+                // Packets still come but no picture is whole any more (a lost packet, and the next key frame is far
+                // off): start the stream again, which normally begins at a key frame, instead of a frozen picture.
+                val stuck = maxOf(LiveTiming.silenceMs, LiveTiming.firstPictureMs)
+                if (started != 0L && now - lastPicture > stuck) return ended("no picture for ${seconds(stuck)} while data keeps coming")
             }
         }
 
@@ -831,6 +862,9 @@ internal class LiveRun(
     private companion object {
         const val BUSY = "camera busy with another request"
         const val CONNECT_MS = 3000
+
+        /** Attempts at a neighbouring even/odd pair of UDP ports before any two will do. */
+        const val PAIR_TRIES = 4
 
         /** Time-outs of the settings request: a small reply, asked for once per run. */
         const val PROPS_MS = 3000

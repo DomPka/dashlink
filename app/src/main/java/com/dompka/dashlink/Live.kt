@@ -50,9 +50,9 @@ internal interface LiveSockets {
     @Throws(IOException::class)
     fun tcp(host: String, port: Int, timeoutMs: Int): Socket
 
-    /** A UDP socket already bound to the camera network, unconnected, on a port chosen by the system. */
+    /** A UDP socket bound to the camera network, unconnected, on [port] (0: a port chosen by the system). */
     @Throws(IOException::class)
-    fun udp(): DatagramSocket
+    fun udp(port: Int): DatagramSocket
 }
 
 internal object Live {
@@ -60,7 +60,7 @@ internal object Live {
     @Volatile
     var sockets: LiveSockets = object : LiveSockets {
         override fun tcp(host: String, port: Int, timeoutMs: Int): Socket = throw IOException("not connected to the camera")
-        override fun udp(): DatagramSocket = throw IOException("not connected to the camera")
+        override fun udp(port: Int): DatagramSocket = throw IOException("not connected to the camera")
     }
 
     /** The camera's address, or null while it is not known. Set in App.onCreate; tests replace it. */

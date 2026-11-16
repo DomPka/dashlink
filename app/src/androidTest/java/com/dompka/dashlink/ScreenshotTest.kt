@@ -295,7 +295,7 @@ class ScreenshotTest {
         // A camera that does not let anyone in on its live-view port.
         Live.sockets = object : LiveSockets {
             override fun tcp(host: String, port: Int, timeoutMs: Int): Socket = throw ConnectException("Connection refused")
-            override fun udp(): DatagramSocket = throw ConnectException("Connection refused")
+            override fun udp(port: Int): DatagramSocket = throw ConnectException("Connection refused")
         }
         Kit.launch().use {
             connectedWithList()

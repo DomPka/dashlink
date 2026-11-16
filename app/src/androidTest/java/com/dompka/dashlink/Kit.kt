@@ -106,7 +106,7 @@ internal object Kit {
      */
     val noLiveStream: LiveSockets = object : LiveSockets {
         override fun tcp(host: String, port: Int, timeoutMs: Int): Socket = throw IOException("no live stream in this test")
-        override fun udp(): DatagramSocket = throw IOException("no live stream in this test")
+        override fun udp(port: Int): DatagramSocket = throw IOException("no live stream in this test")
     }
 
     /** Every test starts from a known place: screen on, unlocked, no leftovers from the test before. */

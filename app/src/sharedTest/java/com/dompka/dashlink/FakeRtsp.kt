@@ -128,6 +128,9 @@ internal class FakeRtsp : Closeable {
     /** "TCP" or "UDP" for each video SETUP that was answered 200. */
     val transports = CopyOnWriteArrayList<String>()
 
+    /** The client_port value of every UDP SETUP, as sent ("5000-5001"). */
+    val clientPorts = CopyOnWriteArrayList<String>()
+
     /** host:port of every TCP connection the app asked [sockets] for. */
     val connects = CopyOnWriteArrayList<String>()
 
@@ -236,7 +239,7 @@ internal class FakeRtsp : Closeable {
             return s
         }
 
-        override fun udp(): DatagramSocket = DatagramSocket(0, InetAddress.getByName("127.0.0.1"))
+        override fun udp(port: Int): DatagramSocket = DatagramSocket(port, InetAddress.getByName("127.0.0.1"))
     }
 
     /** Requests with this method, in order. */
@@ -392,6 +395,7 @@ internal class FakeRtsp : Closeable {
             } else {
                 if (!udp) return reply(req, 461)
                 val ports = t.substringAfter("client_port=", "").substringBefore(';')
+                clientPorts.add(ports)
                 val rtpPort = ports.substringBefore('-').toIntOrNull() ?: return reply(req, 461)
                 val o = udpOut ?: DatagramSocket(0, InetAddress.getByName(udpSource)).also { udpOut = it }
                 if (video) udpTo = InetSocketAddress(s.inetAddress, rtpPort)
@@ -714,6 +718,8 @@ internal class FakeRtsp : Closeable {
             val b = ByteArray(size)
             Random(seed.toLong()).nextBytes(b)
             b[0] = (if (idr) 0x65 else 0x41).toByte()
+            // first_mb_in_slice = 0, as in the first (or only) slice of a picture: the receiver checks it.
+            if (size > 1) b[1] = (b[1].toInt() or 0x80).toByte()
             return b
         }
 
