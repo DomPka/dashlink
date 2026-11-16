@@ -20,14 +20,23 @@ import org.junit.runner.RunWith
  */
 @RunWith(AndroidJUnit4::class)
 class LaunchTest {
+    private lateinit var globals: Kit.Globals
 
     @Before
-    fun setUp() = Kit.prepare()
+    fun setUp() {
+        Kit.prepare()
+        globals = Kit.Globals()
+        Live.sockets = Kit.noLiveStream
+    }
 
     @After
     fun tearDown() {
-        Kit.onMain { Link.disconnect() }
-        Kit.shell("svc wifi enable")
+        try {
+            Kit.onMain { Link.disconnect() }
+            Kit.shell("svc wifi enable")
+        } finally {
+            globals.restore()
+        }
     }
 
     private fun granted(permission: String) =

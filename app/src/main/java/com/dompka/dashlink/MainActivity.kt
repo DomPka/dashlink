@@ -1285,6 +1285,7 @@ class MainActivity : Activity() {
 
     private fun buildDownloadPanel(): LinearLayout {
         val panel = LinearLayout(this)
+        panel.id = R.id.panel
         panel.orientation = LinearLayout.VERTICAL
         // The amber lane dash on top; it only looks like something to pull (5.7).
         val grabber = View(this)

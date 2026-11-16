@@ -13,26 +13,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.regex.Pattern
 
 /**
  * The screen itself: being rebuilt, rotated and resized (what folding and unfolding does to an app),
  * the battery-optimisation question, and the Diagnostics report.
+ *
+ * While the camera is connected the screen also runs its live tile and reads the clips' first bytes for
+ * thumbnails; there is no live stream here (Kit.noLiveStream), and slowed or stalled transfers are downloads only.
  */
 @RunWith(AndroidJUnit4::class)
 class ScreenTest {
     private lateinit var cam: FakeCam
     private lateinit var radio: FakeRadio
+    private lateinit var globals: Kit.Globals
     private val tag = System.nanoTime().toString()         // digits only: a clip name must not look like a secret
 
     @Before
     fun setUp() {
         Kit.prepare()
         Kit.grantAll()
+        globals = Kit.Globals()
         cam = FakeCam()
         radio = FakeRadio()
         Cam.opener = cam.opener()
         Cam.downloadTimeoutMs = 5000
+        Live.sockets = Kit.noLiveStream
         Kit.onMain { Link.radio = radio }
     }
 
@@ -51,14 +56,14 @@ class ScreenTest {
             Kit.shell("dumpsys deviceidle whitelist -${Kit.PKG}")
             cam.close()
             Kit.deleteStored(tag)
+            globals.restore()
         }
     }
 
     private fun name(letter: String) = "T${tag}_$letter.MP4"
 
-    private fun row(name: String) = Kit.waitFor("the row of $name") {
-        Kit.device.findObject(By.text(Pattern.compile(".*" + Pattern.quote(name) + ".*", Pattern.DOTALL)))
-    }
+    /** The text of the row of [name], scrolled into plain view (on a phone the download panel covers the list's end). */
+    private fun row(name: String) = Kit.clip(name)
 
     /** Whether the row of [name] shows a tick: the box that sits in the same row as its texts. */
     private fun isTicked(name: String): Boolean {
@@ -164,7 +169,7 @@ class ScreenTest {
         val a = name("A")
         cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { req, reply ->
-            if ('?' !in req.target) {
+            if (req.download) {
                 reply.chunk = 20_000
                 reply.chunkDelayMs = 80                     // about twenty-four seconds
             }
@@ -184,7 +189,7 @@ class ScreenTest {
             assertEquals("still the same job, still running", Jobs.DOWNLOADING, Jobs.all.single().state)
             Kit.until("the clip to be saved", 60_000) { Jobs.all.single().state == Jobs.SAVED }
             assertEquals("one job, one file: nothing was started twice", 1, Kit.stored(tag).size)
-            assertEquals(1, cam.fileRequests().size)
+            assertEquals(1, cam.downloads().size)
         }
     }
 
@@ -234,7 +239,7 @@ class ScreenTest {
         Kit.launch().use {
             val names = connectedWithTwoTicked()
             // Hold the first clip up so the queue is still busy while the dialogs are on screen.
-            cam.tweak = { req, reply -> if ('?' !in req.target) reply.stallMs = 4000 }
+            cam.tweak = { req, reply -> if (req.download) reply.stallMs = 4000 }
             Kit.tap("download")
 
             // The first download brings the app's own explanation...
@@ -257,7 +262,7 @@ class ScreenTest {
         Kit.launch().use { scenario ->
             connectedWithTwoTicked()
             cam.tweak = { req, reply ->
-                if ('?' !in req.target) {
+                if (req.download) {
                     reply.chunk = 250
                     reply.chunkDelayMs = 2500               // each clip takes a good quarter of a minute
                 }
@@ -326,7 +331,7 @@ class ScreenTest {
         val a = name("A")
         cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { req, reply ->
-            if ('?' !in req.target) {
+            if (req.download) {
                 reply.chunk = 20_000
                 reply.chunkDelayMs = 60
             }

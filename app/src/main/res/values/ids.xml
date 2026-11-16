@@ -31,7 +31,9 @@
     <item name="live_retry" type="id" />
     <!-- A clip row's thumbnail; tapping it opens the clip. -->
     <item name="thumb" type="id" />
-    <!-- The download panel: the clip on its way and how far through the queue it is. -->
+    <!-- The download panel (on a phone it floats over the bottom of the list), the clip on its way and how far
+         through the queue it is. -->
+    <item name="panel" type="id" />
     <item name="panel_clip" type="id" />
     <item name="panel_count" type="id" />
 </resources>
