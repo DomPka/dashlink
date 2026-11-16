@@ -254,9 +254,18 @@ class ScreenshotTest {
             shot("8-unfolded")
             Kit.shell("wm size reset")
             Kit.shell("wm density reset")
+            Kit.until("the phone screen again") { config.densityDpi != 380 && config.screenWidthDp < 600 }
             Kit.device.setOrientationLeft()
-            Kit.until("the phone to be sideways") {
-                config.densityDpi != 380 && config.orientation == Configuration.ORIENTATION_LANDSCAPE
+            // A turn asked for while the display is still settling from the resize can be dropped: ask again
+            // every few seconds until the app has been told.
+            var askedAt = SystemClock.uptimeMillis()
+            Kit.until("the phone to be sideways", 30_000) {
+                val sideways = config.orientation == Configuration.ORIENTATION_LANDSCAPE
+                if (!sideways && SystemClock.uptimeMillis() - askedAt > 3_000) {
+                    Kit.device.setOrientationLeft()
+                    askedAt = SystemClock.uptimeMillis()
+                }
+                sideways
             }
             // Sideways the live tile is further down the left column, out of sight: only the screen is waited for.
             Kit.until("the sideways layout") { Kit.text("status").contains("MiVue_Test") }

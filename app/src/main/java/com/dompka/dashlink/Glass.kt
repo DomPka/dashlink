@@ -86,9 +86,9 @@ internal object Glass {
      * hairline) for list rows, chips and round buttons. Levels 2 and 3 add the top sheen, a bright top edge and a
      * soft bottom shade for cards and panels; the sheen is dropped in battery saver.
      */
-    fun surface(c: Context, level: Int, corners: Corners): Drawable {
+    fun surface(c: Context, level: Int, corners: Corners, alpha: Float? = null): Drawable {
         val t = Tokens.of(c)
-        val fill = shape(c, corners, withAlpha(t.glassBase, t.glassAlpha(level)))
+        val fill = shape(c, corners, withAlpha(t.glassBase, alpha ?: t.glassAlpha(level)))
         val line = hairline(c, corners, t.hairline)
         if (level <= 1) return LayerDrawable(arrayOf(fill, line))
 
@@ -137,7 +137,8 @@ internal object Glass {
      * the notched card used on wide screens. Elevation 6 with [elevate].
      */
     fun panel(c: Context, floating: Boolean = false): Drawable =
-        surface(c, 3, if (floating) Corners.CARD else Corners.PANEL_PHONE)
+        // Pinned on a phone it lies over the list: rows showing through it read as clutter, so it is all but opaque.
+        surface(c, 3, if (floating) Corners.CARD else Corners.PANEL_PHONE, if (floating) null else Tokens.MAX_GLASS_ALPHA)
 
     /** A clip row: level 1 glass, 18/18/18/6, with ripple; [selected] adds the accent overlay (5.6). */
     fun row(c: Context, selected: Boolean = false): Drawable {

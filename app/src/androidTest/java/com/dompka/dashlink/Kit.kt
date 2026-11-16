@@ -115,6 +115,9 @@ internal object Kit {
         device.wakeUp()
         shell("wm dismiss-keyguard")
         shell("settings put secure show_ime_with_hard_keyboard 0")
+        // Android explains swipe-to-exit the first time an app goes full screen (the live viewer); that box would
+        // sit over the viewer and take the first Back. A user sees it once; tests start on a fresh emulator.
+        shell("settings put secure immersive_mode_confirmations confirmed")
         // Android's Wi-Fi prompt lives in the Settings app, and a box it left open in an earlier test
         // would sit in front of the next one.
         shell("am force-stop com.android.settings")

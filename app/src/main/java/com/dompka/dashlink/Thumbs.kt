@@ -150,10 +150,10 @@ internal object Thumbs {
 
     private class Waiter(val view: WeakReference<ImageView>, val ready: (Boolean) -> Unit)
 
-    /** A clip somebody waits for; [onDisk] is false until the disk cache was looked at. */
+    /** A clip somebody waits for; [diskChecked] stays false until the disk cache was looked at for it. */
     private class Pending(val clip: Cam.Clip) {
         val waiters = ArrayList<Waiter>()
-        var onDisk = true
+        var diskChecked = false
     }
 
     /** Guards everything from here down to [cameraIp]; the worker waits on [changed]. */
@@ -250,7 +250,7 @@ internal object Thumbs {
                         keys.remove()
                     }
                 }
-                queue.firstOrNull { !pending.getValue(it).onDisk }?.let { return Job.Disk(it) }
+                queue.firstOrNull { !pending.getValue(it).diskChecked }?.let { return Job.Disk(it) }
                 if (queue.isEmpty()) {
                     changed.await()
                     continue
@@ -305,7 +305,7 @@ internal object Thumbs {
             null
         }
         if (bitmap == null) {
-            lock.withLock { pending[key]?.onDisk = false }
+            lock.withLock { pending[key]?.diskChecked = true }      // not there: the camera is next
             return
         }
         file?.setLastModified(System.currentTimeMillis())             // recently used: trimmed last

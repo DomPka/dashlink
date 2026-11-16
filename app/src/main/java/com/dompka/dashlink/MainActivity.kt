@@ -51,6 +51,7 @@ import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.WindowInsets
 import android.view.animation.AlphaAnimation
 import android.view.animation.AnimationSet
@@ -426,7 +427,6 @@ class MainActivity : Activity() {
         if (nowWide) {
             root.orientation = LinearLayout.HORIZONTAL
             colA.layoutParams = LinearLayout.LayoutParams(0, match, 2f)
-            topScroll.share = 1f
             topScroll.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
             bottom.background = Glass.panel(this, floating = true)
             colA.addView(bottom, LinearLayout.LayoutParams(match, wrap).apply { topMargin = dpi(12f) })
@@ -437,7 +437,6 @@ class MainActivity : Activity() {
         } else {
             root.orientation = LinearLayout.VERTICAL
             colA.layoutParams = LinearLayout.LayoutParams(match, wrap)
-            topScroll.share = 0.55f
             topScroll.layoutParams = LinearLayout.LayoutParams(match, wrap)
             bottom.background = Glass.panel(this, floating = false)
             colB.layoutParams = LinearLayout.LayoutParams(match, 0, 1f)
@@ -451,10 +450,34 @@ class MainActivity : Activity() {
 
     private fun gutter() = dpi(if (wide == true) 20f else 16f)
 
+    /**
+     * How much of a phone's height column A may take before it scrolls: most of it while there is no list to show
+     * (a notice about permissions must be readable whole, with its button), a little over half once there is.
+     */
+    private fun fitColumnA() {
+        val share = when {
+            wide == true -> 1f
+            Link.ready -> 0.55f
+            else -> 0.85f
+        }
+        if (topScroll.share != share) {
+            topScroll.share = share
+            topScroll.requestLayout()
+        }
+    }
+
     /** Keeps the content clear of the system bars, the cutout and the keyboard; the field and the list run on under the bars. */
     private fun applyInsets() {
         val gutter = gutter()
         val nav = navInset()
+        // Column A's scroll box reaches into the gutters, so the cards' side shadows stay inside its clip.
+        (topScroll.layoutParams as? LinearLayout.LayoutParams)?.let {
+            it.leftMargin = -gutter
+            it.rightMargin = -gutter
+        }
+        topScroll.setPadding(gutter, 0, gutter, 0)
+        topScroll.clipToPadding = false
+        fitColumnA()
         frame.setPadding(0, 0, 0, keyboard)            // what adjustResize did before edge to edge
         root.setPadding(bars.left + gutter, bars.top, bars.right + gutter, 0)
         if (wide == true) {
@@ -1051,7 +1074,6 @@ class MainActivity : Activity() {
         Type.label(c)
         c.setTextColor(chipText())
         c.gravity = Gravity.CENTER
-        c.setPadding(dpi(16f), 0, dpi(16f), 0)
         val inset = dpi(4f)
         c.background = StateListDrawable().apply {
             setEnterFadeDuration(140)
@@ -1059,6 +1081,8 @@ class MainActivity : Activity() {
             addState(intArrayOf(android.R.attr.state_selected), InsetDrawable(Glass.chip(this@MainActivity, true), 0, inset, 0, inset))
             addState(intArrayOf(), InsetDrawable(Glass.chip(this@MainActivity, false), 0, inset, 0, inset))
         }
+        // After the background: an inset background replaces the view's padding with its own insets.
+        c.setPadding(dpi(16f), 0, dpi(16f), 0)
         c.isClickable = true
         c.isFocusable = true
         Glass.pressable(c)
@@ -1131,9 +1155,9 @@ class MainActivity : Activity() {
         refreshBtn.setImageResource(R.drawable.ic_refresh)
         refreshBtn.imageTintList = ColorStateList.valueOf(t.text2)
         refreshBtn.scaleType = ImageView.ScaleType.FIT_CENTER
-        val p = dpi(13f)                                    // a 22dp icon in the middle of the 48dp target
-        refreshBtn.setPadding(p, p, p, p)
         refreshBtn.background = InsetDrawable(Glass.iconButton(this), dpi(4f))
+        val p = dpi(13f)                                    // a 22dp icon in the middle of the 48dp target (after the background, see chip())
+        refreshBtn.setPadding(p, p, p, p)
         refreshBtn.contentDescription = "Refresh"
         refreshBtn.setOnClickListener {
             sweep()
@@ -1340,6 +1364,9 @@ class MainActivity : Activity() {
         val buttons = LinearLayout(this)
         downloadBtn = button(R.id.download, "Download selected")
         filled(downloadBtn, 52f)
+        // In a wide screen's narrow left column "Download selected" would be cut: the label shrinks a little first.
+        downloadBtn.setPadding(dpi(12f), 0, dpi(12f), 0)
+        downloadBtn.setAutoSizeTextTypeUniformWithConfiguration(12, 15, 1, TypedValue.COMPLEX_UNIT_SP)
         downloadBtn.setOnClickListener { downloadSelected() }
         Glass.pressable(downloadBtn)
         val stop = button(R.id.stop, "Stop")
@@ -1380,9 +1407,18 @@ class MainActivity : Activity() {
         show(downloadBtn, if (n == 0) "Download selected" else if (n == 1) "Download 1 clip" else "Download $n clips")
     }
 
-    /** A ScrollView that takes at most [share] of the height on offer and scrolls the rest; all of it at 1. */
+    /**
+     * A ScrollView that takes at most [share] of the height on offer and scrolls the rest; all of it at 1. It clips
+     * to its own bounds: its parent lets children draw outside (for the cards' shadows), and a ScrollView without
+     * padding relies on its parent for that clip, so a long notice would otherwise spill over the folder chips.
+     */
     private class CappedScroll(context: Context) : ScrollView(context) {
         var share = 0.5f
+
+        init {
+            outlineProvider = ViewOutlineProvider.BOUNDS
+            clipToOutline = true
+        }
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val spec = if (share >= 1f || MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) {
@@ -1798,6 +1834,7 @@ class MainActivity : Activity() {
 
     private fun render() {
         if (isDestroyed) return
+        fitColumnA()
         val st = Link.state
         val sb = StringBuilder()
         sb.append(

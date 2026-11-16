@@ -281,7 +281,10 @@ internal class LiveRun(
 
     private fun readProps(): Map<String, String> = try {
         Cam.previewProps().also { p ->
-            LiveLog.add("live view settings: " + p.entries.joinToString { "${it.key.removePrefix("Camera.Preview.")}=${it.value}" }.ifEmpty { "none" })
+            // Only the preview settings: a camera that answers with everything it has (as the fake one does)
+            // must not put its Wi-Fi key into the log, even though the report redacts it again.
+            val preview = p.entries.filter { it.key.startsWith("Camera.Preview.", ignoreCase = true) }
+            LiveLog.add("live view settings: " + preview.joinToString { "${it.key.substring("Camera.Preview.".length)}=${it.value}" }.ifEmpty { "none" })
         }
     } catch (e: IOException) {
         LiveLog.add("live view settings could not be read: ${Cam.describe(e)}")

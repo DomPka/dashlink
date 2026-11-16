@@ -46,6 +46,16 @@ class LiveTest {
     }
 
     @Test(timeout = 15_000)
+    fun aCameraThatAnswersWithEverything_onlyThePreviewSettingsAreLogged() {
+        val h = live("Camera.Preview.RTSP.av=4\nNet.WIFI_AP.SSID=MiVue_Test\nNet.WIFI_AP.CryptoKey=hunter2secret\n")
+        h.h264("/liveRTSP/av4")
+        h.start()
+        h.awaitPlaying()
+        assertTrue(Live.log().any { it.endsWith("live view settings: RTSP.av=4") })
+        assertTrue("the Wi-Fi key stays out of the log: ${Live.log()}", Live.log().none { it.contains("hunter2secret") || it.contains("CryptoKey") })
+    }
+
+    @Test(timeout = 15_000)
     fun withoutSettings_av4First_andTheLogSaysWhy() {
         val h = live()
         h.h264("/liveRTSP/v1")
