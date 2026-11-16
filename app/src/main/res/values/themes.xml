@@ -2,14 +2,19 @@
 <resources>
     <bool name="light_bars">true</bool>
 
-    <!-- The phone's own look (fonts, dialogs, switches) with DashLink's colours and no title bar: the screen draws its own heading. -->
+    <!-- The phone's own look (fonts, dialogs, switches) with DashLink's colours and no title bar: the screen draws its own heading.
+         Edge to edge: the system bars are transparent and their icons follow light/dark. The window background stays a solid
+         colour until a screen installs FieldBackground over it. -->
     <style name="AppTheme" parent="android:Theme.DeviceDefault.DayNight">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@color/bg</item>
         <item name="android:colorAccent">@color/accent</item>
-        <item name="android:statusBarColor">@color/bg</item>
-        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
         <item name="android:windowLightStatusBar">@bool/light_bars</item>
         <item name="android:windowLightNavigationBar">@bool/light_bars</item>
     </style>
