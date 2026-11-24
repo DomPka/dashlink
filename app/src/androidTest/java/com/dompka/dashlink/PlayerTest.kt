@@ -105,8 +105,9 @@ class PlayerTest {
 
     @Test
     fun download_fromThePlayer_storesTheClip_andShowsSaved() {
-        val data = TestVideo.mp4(6, 640, 360, 25)
-        val clip = rig.clip("Normal", name("D"), data, "2026-03-01 10:09:00", secs = "6")
+        // Long enough that playing on after the download cannot run into the end of the clip (which shows 00:00).
+        val data = TestVideo.mp4(15, 640, 360, 25)
+        val clip = rig.clip("Normal", name("D"), data, "2026-03-01 10:09:00", secs = "15")
         // Slow enough to see the player wait for it.
         rig.cam.tweak = { req, reply ->
             if (req.path == clip.path && req.headers["range"] == null) {
