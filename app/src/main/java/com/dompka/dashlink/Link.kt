@@ -122,15 +122,17 @@ object Link {
         ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
     ) {
         override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
-            // The phone's other Wi-Fi coming and going is what shows, in the report, what took the camera's place.
-            if (wifiNets.put(n, caps) == null && n != network) {
-                LinkLog.add("other Wi-Fi up: ${(caps.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
+            // Wi-Fi networks coming and going show, in the report, what took the camera's place. Named rather than
+            // called "camera" or "other": the camera's own network can show up here before Link knows it is the camera.
+            if (wifiNets.put(n, caps) == null) {
+                LinkLog.add("Wi-Fi up: ${(caps.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
             }
             changed()
         }
 
         override fun onLost(n: Network) {
-            if (wifiNets.remove(n) != null && n != network) LinkLog.add("other Wi-Fi gone")
+            val gone = wifiNets.remove(n)
+            if (gone != null) LinkLog.add("Wi-Fi gone: ${(gone.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
             changed()
         }
     }
