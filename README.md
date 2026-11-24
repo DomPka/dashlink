@@ -82,19 +82,27 @@ Stop cancels everything that is queued and deletes what was half-downloaded.
   and coming back, Stop from every state, and that nothing but the six reading requests is ever sent;
 - reading a clip in pieces (`RemoteFile`): random reads anywhere, the way Android's player reads a clip
   (start, index at the end, then straight through) in three requests, read-ahead, a camera that ignores
-  the end of a range or `Range` altogether, replies that are not what was asked for, cuts, stalls, close.
+  the end of a range or `Range` altogether, a camera that caps its replies, replies that are not what was
+  asked for, cuts, stalls, close, and giving the camera up to whoever waits for it.
 
 `./gradlew connectedDebugAndroidTest` — on an emulator or phone. CI runs them on two emulators: API 34
 (Android 14) and API 36 (Android 16). The real app, service and MediaStore, with `FakeCam` as the camera and a
 pretend Wi-Fi link: permission dialogs granted and denied, Android's Wi-Fi prompt declined, left alone and
 timed out, Wi-Fi off, downloads through the screen into shared storage, a queue left behind by a killed
 process, the app being rebuilt, rotated and resized, the battery-optimisation question, the Diagnostics report.
+The media tests make their own video on the emulator (Android's H.264 encoder) and serve it through the fakes:
+the live tile and the full-screen viewer play H.264 and Motion-JPEG streams, give the camera up to a download or
+a file list and come back by themselves; the player plays and seeks a clip with its index at the end (as a
+dashcam writes it) by reading only ranges, downloads it, and lets go of the camera when closed; thumbnails come
+from the clip, then from the cache, and are never fetched while a download runs.
 
 `ci/smoke.sh app.apk` — installs the release APK on the emulator and pokes it over plain adb, with all
 permissions granted and with all denied. Any crash or ANR of the app in logcat fails the build.
 
 Every run also takes pictures of the screen in its main states (`ScreenshotTest`: not connected, permissions
-missing, a list of clips, a download, dark mode, an unfolded and a sideways screen). They are in the
+missing, a list of clips, a download, dark mode, an unfolded and a sideways screen, the live tile playing, not
+available, dark and wide; `MediaShotsTest`: the viewer sideways and upright, busy and not available, the player
+light, dark and unable to play). They are in the
 `screenshots` folder of the emulator jobs' artifacts - the quickest way to see what a change did to the look.
 
 An emulator is not a Galaxy Z Fold: it has stock Android's battery rules, one screen and a simulated Wi-Fi
@@ -139,9 +147,15 @@ did, why Android last stopped the app, and what the camera answered — without 
 - `Jobs.kt`, `Runner.kt` — the download queue and what happens to one clip (wait, resume, give up).
 - `MediaFiles.kt` — files in shared storage (pending MediaStore items).
 - `DownloadService.kt` — the foreground service around the queue.
-- `Browser.kt`, `MainActivity.kt` — the file list and the single screen (built in code from platform widgets;
-  colours, shapes and icons are in `res/`). On a wide screen it shows two columns.
+- `Browser.kt`, `MainActivity.kt` — the file list and the main screen with the live tile and thumbnails (built
+  in code from platform widgets). On a wide screen it shows two columns.
+- `LiveSurface.kt`, `LiveActivity.kt` — the live picture (MediaCodec for H.264, drawn frames for Motion-JPEG)
+  and the full-screen viewer.
+- `PlayerActivity.kt`, `ClipSource.kt`, `MediaChrome.kt` — the clip player (Android's MediaPlayer reading the
+  clip through `RemoteFile`) and its shared bits.
+- `Thumbs.kt` — clip thumbnails, made on the phone from the clip, kept in memory and on disk.
 - `Power.kt`, `Report.kt`, `Diag.kt`, `App.kt` — battery optimisation, the Diagnostics report, last-crash note.
 - `Tokens.kt`, `Glass.kt`, `Type.kt`, `Drawables.kt` — the look ("Lens Glass"): colours from the wallpaper
   (Material You) with fixed signal colours, frosted-glass surfaces, type styles and the drawn details.
-- `app/src/sharedTest` — `FakeCam` and `FakeRtsp`, used by both kinds of test.
+- `app/src/sharedTest` — `FakeCam` and `FakeRtsp`, used by both kinds of test; `app/src/androidTest/TestVideo.kt`
+  makes the test video on the emulator.
