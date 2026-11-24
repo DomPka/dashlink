@@ -259,6 +259,9 @@ class DownloadTest {
         // A phone that can hold one Wi-Fi connection only (as the Galaxy this app is meant for reported): Android gave
         // the Wi-Fi back to something else (wireless Android Auto). Taking it again by itself would start a tug of war.
         Link.oneWifiOnly = { true }
+        // As with the real link, nothing reaches the camera while its Wi-Fi is not up.
+        val real = Cam.opener
+        Cam.opener = Cam.Opener { path -> if (!Link.ready) throw java.io.IOException("not connected to the camera") else real.open(path) }
         val a = name("A")
         val data = cam.addFile("Normal", a, 6_000_000)
         cam.tweak = { req, reply ->
@@ -273,8 +276,6 @@ class DownloadTest {
             assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
             Kit.until("the download to be under way") { (job(a)?.done ?: 0) > 200_000 }
 
-            val real = Cam.opener
-            Cam.opener = Cam.Opener { throw java.io.IOException("not connected to the camera") }
             radio.answer = false
             radio.drop()
             cam.hangUp()
@@ -286,7 +287,6 @@ class DownloadTest {
             // Connect, tapped, takes the Wi-Fi back for the camera, and the download goes on where it stopped, even
             // though the phone is put away before the camera's Wi-Fi is up again.
             cam.tweak = null
-            Cam.opener = real
             val before = cam.downloads().size
             Kit.connectThroughUi()
             Kit.device.pressHome()

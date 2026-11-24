@@ -468,7 +468,12 @@ class PlayerActivity : Activity() {
         } else if (s == Show.BUSY) {
             notice(R.drawable.ic_camera, td.warnText, "Waiting for the camera", "It is reading a list of clips; this one plays right after.")
         }
-        if (s == Show.LOST) notice(R.drawable.ic_lens_off, td.errorText, "Lost the camera", "The clip plays again when the camera is back.")
+        if (s == Show.LOST) {
+            // On a phone with one Wi-Fi connection the link is not taken back by itself (see LinkCore.singleWifi).
+            val detail = if (Link.gone) "Go back and tap Connect: the clip plays again once the camera is back."
+            else "The clip plays again when the camera is back."
+            notice(R.drawable.ic_lens_off, td.errorText, "Lost the camera", detail)
+        }
         for (v in listOf(seek, back10, fwd10)) Glass.setEnabledLook(v, ready)
         Glass.setEnabledLook(play, ready || s == Show.ERROR)
         showPlayState()

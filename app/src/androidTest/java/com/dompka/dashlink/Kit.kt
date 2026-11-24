@@ -109,10 +109,10 @@ internal object Kit {
         override fun udp(port: Int): DatagramSocket = throw IOException("no live stream in this test")
     }
 
-    /** Every test starts from a known place: screen on, unlocked, no leftovers from the test before. */
     /** Link's own check, kept before tests replace it (see prepare). */
     val shippedOneWifiOnly: (Context) -> Boolean = Link.oneWifiOnly
 
+    /** Every test starts from a known place: screen on, unlocked, no leftovers from the test before. */
     fun prepare(batteryExempt: Boolean = true) {
         Configurator.getInstance().waitForIdleTimeout = 1000
         device.wakeUp()

@@ -43,6 +43,9 @@ object Link {
     /** Every Wi-Fi network the phone currently holds (camera included), for the status line. */
     val wifiNets = ConcurrentHashMap<Network, NetworkCapabilities>()
 
+    /** Every Wi-Fi network the watcher has seen come up, with or without internet: for the link events only. */
+    private val seen = ConcurrentHashMap<Network, NetworkCapabilities>()
+
     /** The system side of the link. Tests swap in a pretend one. */
     @Volatile
     internal var radio: LinkCore.Radio = SystemRadio()
@@ -131,15 +134,18 @@ object Link {
         ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
     ) {
         override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
-            // Wi-Fi networks coming and going show, in the report, what took the camera's place. Named rather than
-            // called "camera" or "other": the camera's own network can show up here before Link knows it is the camera.
-            if (wifiNets.put(n, caps) == null) LinkLog.add("Wi-Fi up: ${nameOf(caps)}")
+            // Every Wi-Fi network coming and going is logged: in the report that shows what took the camera's place.
+            // Named rather than called "camera" or "other": the camera's own network shows up here too, sometimes
+            // before Link knows it is the camera.
+            if (seen.put(n, caps) == null) LinkLog.add("Wi-Fi up: ${nameOf(caps)}")
+            // The status line's list keeps the internet-capable ones, as before; the camera's comes from its own request.
+            if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) wifiNets[n] = caps
             changed()
         }
 
         override fun onLost(n: Network) {
-            val gone = wifiNets.remove(n)
-            if (gone != null) LinkLog.add("Wi-Fi gone: ${nameOf(gone)}")
+            seen.remove(n)?.let { LinkLog.add("Wi-Fi gone: ${nameOf(it)}") }
+            if (n != network) wifiNets.remove(n)
             changed()
         }
     }
