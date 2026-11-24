@@ -118,6 +118,9 @@ internal object Kit {
         // Android explains swipe-to-exit the first time an app goes full screen (the live viewer); that box would
         // sit over the viewer and take the first Back. A user sees it once; tests start on a fresh emulator.
         shell("settings put secure immersive_mode_confirmations confirmed")
+        // The emulators report one Wi-Fi link only. Tests run as on a phone with two (a dropped link is taken back
+        // by itself) unless they say otherwise; the one-Wi-Fi behaviour has tests of its own.
+        Link.oneWifiOnly = { false }
         // A test whose process died before its tearDown could leave the display resized, dark or turned:
         // every test starts from the plain phone screen (these are no-ops when nothing was changed).
         shell("wm size reset")
@@ -500,7 +503,7 @@ internal object Kit {
     fun connectThroughUi(ssid: String = "MiVue", pass: String = "12345678") {
         type("ssid", ssid)
         type("pass", pass)
-        val twoLinks = wifi.isStaConcurrencyForLocalOnlyConnectionsSupported
+        val twoLinks = !Link.oneWifiOnly(ctx)
         val warning = ".*cannot hold two Wi-Fi connections.*"
         if (Link.core.requests == 0) {
             // First connection of this process: either Android has been asked, or the warning below is up.

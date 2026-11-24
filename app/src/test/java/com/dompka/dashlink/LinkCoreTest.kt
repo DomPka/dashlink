@@ -86,7 +86,7 @@ class LinkCoreTest {
         timer = FakeTimer()
         radio = FakeRadio()
         changes = 0
-        core = LinkCore(radio, timer) { changes++ }
+        core = LinkCore(radio, timer, { changes++ })
     }
 
     private fun connected(exact: Boolean = true) {
@@ -273,6 +273,60 @@ class LinkCoreTest {
         assertEquals(0, core.retries)
         assertEquals(setOf(radio.last), radio.registered)
         assertEquals(0, timer.pending)
+    }
+
+    @Test
+    fun linkLost_onAPhoneWithOneWifi_isNotTakenBackByItself() {
+        // As on a phone that reports no second (local-only) Wi-Fi link: the camera's network replaced the car's,
+        // and Android gave the Wi-Fi back to it. Asking again would cut wireless Android Auto off once more.
+        val notes = ArrayList<String>()
+        core = LinkCore(radio, timer, { changes++ }, { notes.add(it) })
+        core.singleWifi = true
+        connected()
+        timer.advance(130_000)
+        core.onLost(radio.last)
+        assertEquals(LinkState.NOT_FOUND, core.state)
+        assertFalse("nothing is asked for by itself", core.reconnecting)
+        assertTrue(core.lastError!!.contains("one Wi-Fi connection"))
+        assertTrue(core.lastError!!.contains("Tap Connect"))
+        timer.advance(600_000)
+        assertEquals("not asked again", 1, radio.asked.size)
+        assertNothingLeft()
+        assertTrue(notes.toString(), notes.any { it == "lost after 130 s connected" })
+        assertTrue(notes.toString(), notes.any { it.startsWith("not asked for again") })
+
+        // Connect, tapped by someone, takes it back as usual.
+        core.connect("MiVue_956W_1234", "12345678", true)
+        assertEquals(2, radio.asked.size)
+        core.onAvailable(radio.last, "net-back")
+        assertEquals(LinkState.CONNECTED, core.state)
+    }
+
+    @Test
+    fun events_sayWhatHappened_inOrder() {
+        val notes = ArrayList<String>()
+        core = LinkCore(radio, timer, { changes++ }, { notes.add(it) })
+        core.connect("MiVue", "12345678", false)
+        timer.advance(2_500)
+        core.onAvailable(radio.last, "net-1")
+        core.onSsid(radio.last, "\"MiVue_a46240\"")
+        timer.advance(60_000)
+        core.onLost(radio.last)
+        // A name learned from the system makes the link reconnect by itself (a phone with two Wi-Fi links).
+        timer.advance(3_000)
+        core.disconnect()
+        assertEquals(
+            listOf(
+                "Connect tapped: looking for a network starting with \"MiVue\"",
+                "connected after 2.5 s",
+                "the camera's network is \"MiVue_a46240\"",
+                "lost after 60 s connected",
+                "asking again in 3.0 s",
+                "asking Android again by itself (1x)",
+                "Disconnect",
+            ),
+            notes,
+        )
     }
 
     @Test

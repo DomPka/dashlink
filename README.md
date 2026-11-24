@@ -17,6 +17,12 @@ is listed under [Not covered by any test](#not-covered-by-any-test).
   failed and the next one starts. A camera that is out of reach pauses the queue instead: after ten minutes
   connected without a new byte, or as soon as the link has given up. A full phone pauses it too. A paused
   queue keeps what it has and continues when the camera is back or Download is tapped.
+- On a phone that can hold only one Wi-Fi connection (the Diagnostics report says "Two Wi-Fi links at once
+  (local-only): false"), connecting to the camera replaces the phone's other Wi-Fi, wireless Android Auto
+  included, and DashLink says so before it connects. If Android then gives the Wi-Fi back to something else,
+  DashLink does not take it again by itself (that would cut Android Auto off once more, and it would take the
+  Wi-Fi back in turn): tap Connect when you want the camera, and downloads go on from where they stopped. The
+  Diagnostics report lists the link's events with the time of day, so a drop can be matched to what happened.
 - Saves clips straight into `Movies/DashLink` (photos into `Pictures/DashLink`). An unfinished clip is hidden
   from the Gallery until it is complete; there is never a second copy.
 - Remembers the queue: clips that were queued when Android stopped the app are still queued, and continue from

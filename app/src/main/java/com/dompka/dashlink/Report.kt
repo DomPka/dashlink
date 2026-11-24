@@ -70,6 +70,11 @@ internal object Report {
             sb.append("\n== Why Android ended the app before\n")
             for (e in exits) sb.append(e).append("\n")
         }
+        val events = Link.events()
+        if (events.isNotEmpty()) {
+            sb.append("\n== Link events\n")
+            for (line in events) sb.append(Diag.redact(line)).append("\n")
+        }
         App.lastCrash(ctx)?.let { sb.append("\n== Last crash\n").append(it.take(4000)).append("\n") }
 
         if (Link.state == LinkState.CONNECTED) {

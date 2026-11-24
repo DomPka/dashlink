@@ -7,6 +7,7 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiInfo
+import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Handler
 import android.os.Looper
@@ -56,8 +57,26 @@ object Link {
             override fun after(delayMs: Long, run: () -> Unit): Any = Runnable { run() }.also { main.postDelayed(it, delayMs) }
             override fun cancel(token: Any) = main.removeCallbacks(token as Runnable)
         },
-        ::changed
+        ::changed,
+        { LinkLog.add(it) },
     )
+
+    /**
+     * Whether this phone can hold the camera's Wi-Fi only instead of its other Wi-Fi, not next to it (see
+     * LinkCore.singleWifi). Read at every Connect; tests replace it.
+     */
+    @Volatile
+    internal var oneWifiOnly: (Context) -> Boolean = { ctx ->
+        try {
+            val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            wm.isStaConcurrencyForLocalOnlyConnectionsSupported.not()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** What happened to the link, newest last, with the time of day: for the Diagnostics report. */
+    fun events(): List<String> = LinkLog.lines()
 
     val state: LinkState get() = core.state
     val network: Network? get() = core.network as? Network
@@ -103,12 +122,15 @@ object Link {
         ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
     ) {
         override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
-            wifiNets[n] = caps
+            // The phone's other Wi-Fi coming and going is what shows, in the report, what took the camera's place.
+            if (wifiNets.put(n, caps) == null && n != network) {
+                LinkLog.add("other Wi-Fi up: ${(caps.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
+            }
             changed()
         }
 
         override fun onLost(n: Network) {
-            wifiNets.remove(n)
+            if (wifiNets.remove(n) != null && n != network) LinkLog.add("other Wi-Fi gone")
             changed()
         }
     }
@@ -116,6 +138,7 @@ object Link {
     /** [ssid] is the camera's Wi-Fi name, or just the start of it unless [exact]. */
     fun connect(ctx: Context, ssid: String, pass: String, exact: Boolean) {
         init(ctx)
+        core.singleWifi = oneWifiOnly(ctx)
         core.connect(ssid, pass, exact)
     }
 
@@ -232,4 +255,20 @@ object Link {
             }
         }
     }
+}
+
+/** The last link events with the time of day (Diagnostics report). Any thread. */
+internal object LinkLog {
+    private const val MAX = 40
+    private val lines = ArrayDeque<String>()
+
+    fun add(line: String) {
+        val stamped = String.format(java.util.Locale.US, "%tT ", System.currentTimeMillis()) + line.take(200)
+        synchronized(lines) {
+            lines.addLast(stamped)
+            while (lines.size > MAX) lines.removeFirst()
+        }
+    }
+
+    fun lines(): List<String> = synchronized(lines) { lines.toList() }
 }

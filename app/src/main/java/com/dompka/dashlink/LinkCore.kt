@@ -15,7 +15,9 @@ enum class LinkState { IDLE, SEARCHING, CONNECTED, LOST, NOT_FOUND }
 internal class LinkCore(
     private val radio: Radio,
     private val timer: Timer,
-    private val changed: () -> Unit
+    private val changed: () -> Unit,
+    /** Told what happened, in a few words, as it happens: kept for the Diagnostics report. */
+    private val note: (String) -> Unit = {},
 ) {
     /** What LinkCore needs from ConnectivityManager. */
     interface Radio {
@@ -72,11 +74,21 @@ internal class LinkCore(
     var retryDelayMs = 3_000L
     var maxRetries = 20
 
+    /**
+     * The phone can hold only one Wi-Fi connection (no local-only second link). Then the camera's network
+     * replaces the phone's other Wi-Fi, and when Android takes the camera's away again it is for something
+     * else (wireless Android Auto, a saved network). Asking for it back at once would cut that off, and it
+     * would take the Wi-Fi back in turn: a tug of war that ends neither. So after such a drop nothing is
+     * asked for until someone taps Connect. Set before [connect].
+     */
+    var singleWifi = false
+
     private var want: Want? = null
     private var active: Request? = null
     private var askedAt = 0L
     private var limitMs = 0
     private var everConnected = false
+    private var connectedAt = 0L
     private var retryTimer: Any? = null
     private var watchdog: Any? = null
     private var ipRank = 0
@@ -92,10 +104,13 @@ internal class LinkCore(
         retries = 0
         requests = 0
         cameraSsid = null
+        note("Connect tapped: looking for ${if (exact) "\"$ssid\"" else "a network starting with \"$ssid\""}" +
+            if (singleWifi) " (this phone has one Wi-Fi connection)" else "")
         ask()
     }
 
     fun disconnect() {
+        if (want != null) note("Disconnect")
         want = null
         stopTimers()
         drop()
@@ -111,6 +126,7 @@ internal class LinkCore(
         askedAt = timer.now()
         limitMs = if (w.exact) timeoutMs else promptTimeoutMs
         requests++
+        if (retries > 0) note("asking Android again by itself (${retries}x)")
         lastError = null
         state = LinkState.SEARCHING
         try {
@@ -120,6 +136,7 @@ internal class LinkCore(
             active = null
             release(r)
             lastError = "Android refused to look for the camera (${Cam.describe(e)})"
+            note("Android refused the request: ${Cam.describe(e)}")
             move(LinkState.NOT_FOUND)
             return
         }
@@ -151,6 +168,8 @@ internal class LinkCore(
         }
         network = net
         everConnected = true
+        connectedAt = timer.now()
+        note("connected after ${seconds(connectedAt - askedAt)}")
         retries = 0
         lastError = null
         move(LinkState.CONNECTED)
@@ -162,6 +181,7 @@ internal class LinkCore(
         val clean = name?.trim()?.trim('"') ?: return
         if (clean.isEmpty() || clean == UNKNOWN_SSID || clean == cameraSsid) return
         cameraSsid = clean
+        note("the camera's network is \"$clean\"")
         // From now on ask for exactly this network: Android skips its prompt for an exact name it has approved before.
         want?.let { want = Want(clean, it.pass, exact = true) }
         changed()
@@ -204,6 +224,7 @@ internal class LinkCore(
             retryLater()
             return
         }
+        note(if (timedOut) "not found within ${seconds(limitMs.toLong())}" else "Android gave up early (prompt declined, wrong password or Wi-Fi off)")
         lastError = when {
             !timedOut -> "Android could not join the camera's Wi-Fi: the prompt was declined, the password is wrong, or Wi-Fi is off."
             everConnected -> "The camera's Wi-Fi did not come back. Tap Connect to look for it again."
@@ -215,10 +236,19 @@ internal class LinkCore(
     fun onLost(r: Request) {
         if (r !== active) return
         cancelWatchdog()
+        note("lost after ${seconds(timer.now() - connectedAt)} connected")
         // The system does not serve a lost request again by itself; drop it now and ask afresh shortly.
         active = null
         release(r)
         clearNetwork()
+        if (singleWifi) {
+            note("not asked for again: on a phone with one Wi-Fi connection that would take it from what has it now")
+            lastError = "This phone has one Wi-Fi connection, and Android gave it to something else (wireless " +
+                "Android Auto, or a saved network). Tap Connect to take it back for the camera: downloads go on " +
+                "from where they stopped."
+            move(LinkState.NOT_FOUND)
+            return
+        }
         if (mayRetry()) {
             retryLater()
         } else {
@@ -228,6 +258,7 @@ internal class LinkCore(
     }
 
     private fun retryLater() {
+        note("asking again in ${seconds(retryDelayMs)}")
         retries++
         retryTimer?.let { timer.cancel(it) }
         retryTimer = timer.after(retryDelayMs) {
@@ -273,6 +304,8 @@ internal class LinkCore(
         state = s
         changed()
     }
+
+    private fun seconds(ms: Long): String = if (ms < 10_000) String.format(java.util.Locale.US, "%.1f s", ms / 1000.0) else "${ms / 1000} s"
 
     companion object {
         /** WifiManager.UNKNOWN_SSID: what Android reports when the app may not see Wi-Fi names. */

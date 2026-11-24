@@ -2092,19 +2092,17 @@ class MainActivity : Activity() {
             return
         }
         val go = { Link.connect(this, name, key, name == prefs.getString("exactSsid", null)) }
-        val twoLinks = try {
-            wifi.isStaConcurrencyForLocalOnlyConnectionsSupported
-        } catch (e: Exception) {
-            true
-        }
-        if (twoLinks) {
+        // The same check Link uses to decide whether a dropped camera link is taken back by itself.
+        if (!Link.oneWifiOnly(this)) {
             go()
         } else {
             show(
                 AlertDialog.Builder(this)
                     .setMessage(
                         "This phone reports that it cannot hold two Wi-Fi connections at once. " +
-                            "Connecting to the camera will drop the current Wi-Fi, including wireless Android Auto."
+                            "Connecting to the camera will drop the current Wi-Fi, including wireless Android Auto.\n\n" +
+                            "If Android gives the Wi-Fi back to Android Auto or another network, DashLink does not take " +
+                            "it again by itself: tap Connect when you want the camera, and downloads go on from where they stopped."
                     )
                     .setPositiveButton("Connect anyway") { _, _ -> go() }
                     .setNegativeButton("Cancel", null)

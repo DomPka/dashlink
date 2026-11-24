@@ -254,6 +254,48 @@ class DownloadTest {
         }
     }
 
+    @Test
+    fun wifiDropsOnAPhoneWithOneWifi_waitsForConnect_thenFinishes() {
+        // A phone that can hold one Wi-Fi connection only (as the Galaxy this app is meant for reported): Android gave
+        // the Wi-Fi back to something else (wireless Android Auto). Taking it again by itself would start a tug of war.
+        Link.oneWifiOnly = { true }
+        val a = name("A")
+        val data = cam.addFile("Normal", a, 6_000_000)
+        cam.tweak = { req, reply ->
+            if (req.download) {
+                reply.chunk = 20_000
+                reply.chunkDelayMs = 40
+            }
+        }
+        Kit.launch().use {
+            Kit.connectThroughUi()                               // says first that the current Wi-Fi will go
+            Kit.until("the pretend link to come up") { Link.ready }
+            assertNull(DownloadService.enqueue(Kit.ctx, listOf(cam.clip("/SD/Normal/F/$a"))))
+            Kit.until("the download to be under way") { (job(a)?.done ?: 0) > 200_000 }
+
+            val real = Cam.opener
+            Cam.opener = Cam.Opener { throw java.io.IOException("not connected to the camera") }
+            radio.answer = false
+            radio.drop()
+            cam.hangUp()
+            Kit.until("the link to be given up, not asked for again") { Link.state == LinkState.NOT_FOUND }
+            Kit.until("the screen to say why") { Kit.text("status").contains("one Wi-Fi connection") }
+            Kit.holds("nothing asked for by itself", 6_000) { radio.asked.size == 1 && !Link.reconnecting }
+            assertTrue("the link events say what happened", Link.events().any { it.contains("not asked for again") })
+
+            // Connect, tapped, takes the Wi-Fi back for the camera, and the download goes on where it stopped.
+            cam.tweak = null
+            Cam.opener = real
+            radio.answer = true
+            Kit.connectThroughUi()
+            Kit.until("the link to come up again", 30_000) { Link.ready }
+            waitSaved(a)
+            assertArrayEquals(data, Kit.bytes(published(a).uri))
+            assertEquals("asked twice: at Connect and at Connect again", 2, radio.asked.size)
+            assertServiceGone()
+        }
+    }
+
     // ---------------------------------------------------------------- Stop
 
     @Test
