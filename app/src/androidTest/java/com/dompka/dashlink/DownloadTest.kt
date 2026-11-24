@@ -279,18 +279,23 @@ class DownloadTest {
             radio.drop()
             cam.hangUp()
             Kit.until("the link to be given up, not asked for again") { Link.state == LinkState.NOT_FOUND }
-            Kit.until("the screen to say why") { Kit.text("status").contains("one Wi-Fi connection") }
+            Kit.until("the screen to say why") { Kit.text("status").contains("does not take it back by itself") }
             Kit.holds("nothing asked for by itself", 6_000) { radio.asked.size == 1 && !Link.reconnecting }
             assertTrue("the link events say what happened", Link.events().any { it.contains("not asked for again") })
 
-            // Connect, tapped, takes the Wi-Fi back for the camera, and the download goes on where it stopped.
+            // Connect, tapped, takes the Wi-Fi back for the camera, and the download goes on where it stopped, even
+            // though the phone is put away before the camera's Wi-Fi is up again.
             cam.tweak = null
             Cam.opener = real
-            radio.answer = true
+            val before = cam.downloads().size
             Kit.connectThroughUi()
+            Kit.device.pressHome()
+            radio.connectNow()
             Kit.until("the link to come up again", 30_000) { Link.ready }
             waitSaved(a)
             assertArrayEquals(data, Kit.bytes(published(a).uri))
+            val resumed = cam.downloads().drop(before).first()
+            assertTrue("went on from where it stopped, not from the start: ${resumed.rangeStart}", resumed.rangeStart > 0)
             assertEquals("asked twice: at Connect and at Connect again", 2, radio.asked.size)
             assertServiceGone()
         }

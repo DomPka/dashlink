@@ -287,19 +287,45 @@ class LinkCoreTest {
         core.onLost(radio.last)
         assertEquals(LinkState.NOT_FOUND, core.state)
         assertFalse("nothing is asked for by itself", core.reconnecting)
-        assertTrue(core.lastError!!.contains("one Wi-Fi connection"))
-        assertTrue(core.lastError!!.contains("Tap Connect"))
+        assertTrue(core.lastError!!.contains("only Wi-Fi connection"))
+        assertTrue(core.lastError!!.contains("tap Connect"))
+        assertTrue("it does not claim a cause it never checked", core.lastError!!.contains("may be off or out of reach"))
         timer.advance(600_000)
         assertEquals("not asked again", 1, radio.asked.size)
         assertNothingLeft()
-        assertTrue(notes.toString(), notes.any { it == "lost after 130 s connected" })
-        assertTrue(notes.toString(), notes.any { it.startsWith("not asked for again") })
+        assertTrue(notes.toString(), notes.any { it == "lost after 130 s connected; not asked for again (this phone has one Wi-Fi connection)" })
 
         // Connect, tapped by someone, takes it back as usual.
         core.connect("MiVue_956W_1234", "12345678", true)
         assertEquals(2, radio.asked.size)
         core.onAvailable(radio.last, "net-back")
         assertEquals(LinkState.CONNECTED, core.state)
+    }
+
+    @Test
+    fun aServedRequestEndedAsUnavailable_isADrop_andOnAPhoneWithOneWifiIsNotTakenBack() {
+        // Android may end a request it had already served with onUnavailable rather than onLost, long after it was
+        // asked for (so it looks timed out) or soon after. Either way it is the link dropping.
+        for (connectedFor in listOf(120_000L, 5_000L)) {
+            setUp()
+            core.singleWifi = true
+            connected()
+            timer.advance(connectedFor)
+            radio.systemDrops(core, radio.last)
+            assertEquals(LinkState.NOT_FOUND, core.state)
+            assertFalse(core.reconnecting)
+            timer.advance(600_000)
+            assertEquals("after $connectedFor ms connected: not asked again", 1, radio.asked.size)
+            assertNothingLeft()
+        }
+        // On a phone with two Wi-Fi links the same drop is asked for again, as onLost is.
+        setUp()
+        connected()
+        timer.advance(120_000)
+        radio.systemDrops(core, radio.last)
+        assertEquals(LinkState.LOST, core.state)
+        timer.advance(3_000)
+        assertEquals(2, radio.asked.size)
     }
 
     @Test
@@ -320,9 +346,7 @@ class LinkCoreTest {
                 "Connect tapped: looking for a network starting with \"MiVue\"",
                 "connected after 2.5 s",
                 "the camera's network is \"MiVue_a46240\"",
-                "lost after 60 s connected",
-                "asking again in 3.0 s",
-                "asking Android again by itself (1x)",
+                "lost after 60 s connected; asking again by itself in 3.0 s (1x)",
                 "Disconnect",
             ),
             notes,

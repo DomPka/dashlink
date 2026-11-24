@@ -2091,7 +2091,12 @@ class MainActivity : Activity() {
             )
             return
         }
-        val go = { Link.connect(this, name, key, name == prefs.getString("exactSsid", null)) }
+        val go = {
+            Link.connect(this, name, key, name == prefs.getString("exactSsid", null))
+            // Downloads that stopped when the link went: started again now, while the app is on screen (Android
+            // only lets it start the service then), so they go on even if the phone is put away before the link is up.
+            if (Jobs.pausedByLink && Jobs.hasWork()) startProblem = DownloadService.start(this)
+        }
         // The same check Link uses to decide whether a dropped camera link is taken back by itself.
         if (!Link.oneWifiOnly(this)) {
             go()

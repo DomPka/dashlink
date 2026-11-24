@@ -43,6 +43,12 @@ class LaunchTest {
         Kit.ctx.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
     @Test
+    fun theOneWifiCheck_isWhatThePhoneReports() {
+        // Every other test replaces Link.oneWifiOnly: this one holds the real check to what Android says.
+        assertEquals(!Kit.wifi.isStaConcurrencyForLocalOnlyConnectionsSupported, Kit.shippedOneWifiOnly(Kit.ctx))
+    }
+
+    @Test
     fun launch_withAllPermissionsGranted() {
         Kit.grantAll()
         Kit.launch().use {

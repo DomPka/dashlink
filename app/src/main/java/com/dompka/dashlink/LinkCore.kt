@@ -126,7 +126,6 @@ internal class LinkCore(
         askedAt = timer.now()
         limitMs = if (w.exact) timeoutMs else promptTimeoutMs
         requests++
-        if (retries > 0) note("asking Android again by itself (${retries}x)")
         lastError = null
         state = LinkState.SEARCHING
         try {
@@ -155,7 +154,7 @@ internal class LinkCore(
      * that silently once it has been approved. A name pattern would put the system prompt on the screen
      * again and again, in front of someone who may be driving.
      */
-    private fun mayRetry(): Boolean = want?.exact == true && retries < maxRetries
+    private fun mayRetry(): Boolean = !singleWifi && want?.exact == true && retries < maxRetries
 
     fun onAvailable(r: Request, net: Any) {
         if (r !== active) return
@@ -208,6 +207,11 @@ internal class LinkCore(
     /** The system gave up on [r]: it timed out, the prompt was declined, the password was wrong, Wi-Fi is off… */
     fun onUnavailable(r: Request) {
         if (r !== active) return
+        // Android may also end a request it had already served this way: that is the link dropping, not a search failing.
+        if (state == LinkState.CONNECTED) {
+            lost(r)
+            return
+        }
         unavailable(r, timedOut = timer.now() - askedAt >= limitMs - EARLY_MS)
     }
 
@@ -220,11 +224,12 @@ internal class LinkCore(
         // system decides (declined prompt, wrong password, Wi-Fi off, app in the background) comes back early.
         // So: keep looking by itself only for a camera that worked before and is simply not in range right
         // now. Never ask again after an early "no" - that is how a declined prompt turns into a loop.
+        val why = if (timedOut) "not found within ${seconds(limitMs.toLong())}" else "Android ended the search early (prompt declined, wrong Wi-Fi key or Wi-Fi off)"
         if (timedOut && everConnected && mayRetry()) {
-            retryLater()
+            retryLater(why)
             return
         }
-        note(if (timedOut) "not found within ${seconds(limitMs.toLong())}" else "Android gave up early (prompt declined, wrong password or Wi-Fi off)")
+        note(why)
         lastError = when {
             !timedOut -> "Android could not join the camera's Wi-Fi: the prompt was declined, the password is wrong, or Wi-Fi is off."
             everConnected -> "The camera's Wi-Fi did not come back. Tap Connect to look for it again."
@@ -235,31 +240,37 @@ internal class LinkCore(
 
     fun onLost(r: Request) {
         if (r !== active) return
+        lost(r)
+    }
+
+    private fun lost(r: Request) {
         cancelWatchdog()
-        note("lost after ${seconds(timer.now() - connectedAt)} connected")
+        val why = "lost after ${seconds(timer.now() - connectedAt)} connected"
         // The system does not serve a lost request again by itself; drop it now and ask afresh shortly.
         active = null
         release(r)
         clearNetwork()
         if (singleWifi) {
-            note("not asked for again: on a phone with one Wi-Fi connection that would take it from what has it now")
-            lastError = "This phone has one Wi-Fi connection, and Android gave it to something else (wireless " +
-                "Android Auto, or a saved network). Tap Connect to take it back for the camera: downloads go on " +
-                "from where they stopped."
+            note("$why; not asked for again (this phone has one Wi-Fi connection)")
+            lastError = "The camera's Wi-Fi dropped: the camera may be off or out of reach, or Android gave this " +
+                "phone's only Wi-Fi connection to something else, such as wireless Android Auto. On this phone " +
+                "DashLink does not take it back by itself: tap Connect when you want the camera, and downloads go " +
+                "on from where they stopped."
             move(LinkState.NOT_FOUND)
             return
         }
         if (mayRetry()) {
-            retryLater()
+            retryLater(why)
         } else {
+            note(why)
             lastError = "The camera's Wi-Fi dropped. Tap Connect to look for it again."
             move(LinkState.NOT_FOUND)
         }
     }
 
-    private fun retryLater() {
-        note("asking again in ${seconds(retryDelayMs)}")
+    private fun retryLater(why: String) {
         retries++
+        note("$why; asking again by itself in ${seconds(retryDelayMs)} (${retries}x)")
         retryTimer?.let { timer.cancel(it) }
         retryTimer = timer.after(retryDelayMs) {
             retryTimer = null

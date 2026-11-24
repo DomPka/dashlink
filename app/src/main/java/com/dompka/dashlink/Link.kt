@@ -78,6 +78,11 @@ object Link {
     /** What happened to the link, newest last, with the time of day: for the Diagnostics report. */
     fun events(): List<String> = LinkLog.lines()
 
+    private fun nameOf(caps: NetworkCapabilities): String {
+        val ssid = (caps.transportInfo as? WifiInfo)?.ssid
+        return if (ssid == null || ssid == LinkCore.UNKNOWN_SSID) "name hidden" else ssid
+    }
+
     val state: LinkState get() = core.state
     val network: Network? get() = core.network as? Network
     val cameraIp: String? get() = core.cameraIp
@@ -110,7 +115,11 @@ object Link {
         if (app == null) app = ctx.applicationContext
         if (watching) return
         try {
-            val req = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI).build()
+            // Without INTERNET, so that Wi-Fi networks without internet (the camera's, a car's) are seen too.
+            val req = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
             cm(ctx).registerNetworkCallback(req, watcher, main)
             watching = true
         } catch (e: Exception) {
@@ -124,15 +133,13 @@ object Link {
         override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
             // Wi-Fi networks coming and going show, in the report, what took the camera's place. Named rather than
             // called "camera" or "other": the camera's own network can show up here before Link knows it is the camera.
-            if (wifiNets.put(n, caps) == null) {
-                LinkLog.add("Wi-Fi up: ${(caps.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
-            }
+            if (wifiNets.put(n, caps) == null) LinkLog.add("Wi-Fi up: ${nameOf(caps)}")
             changed()
         }
 
         override fun onLost(n: Network) {
             val gone = wifiNets.remove(n)
-            if (gone != null) LinkLog.add("Wi-Fi gone: ${(gone.transportInfo as? WifiInfo)?.ssid ?: "name hidden"}")
+            if (gone != null) LinkLog.add("Wi-Fi gone: ${nameOf(gone)}")
             changed()
         }
     }
@@ -261,7 +268,7 @@ object Link {
 
 /** The last link events with the time of day (Diagnostics report). Any thread. */
 internal object LinkLog {
-    private const val MAX = 40
+    private const val MAX = 200
     private val lines = ArrayDeque<String>()
 
     fun add(line: String) {

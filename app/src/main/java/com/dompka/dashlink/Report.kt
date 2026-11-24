@@ -43,6 +43,7 @@ internal object Report {
     fun build(ctx: Context, folder: String, rear: Boolean, secret: String): String {
         val wifi = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         val sb = StringBuilder("DashLink ${version(ctx)} diagnostics\n")
+        sb.append("Made at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss zzz", java.util.Locale.US).format(java.util.Date())}\n")
         sb.append("Phone: ${Build.MANUFACTURER} ${Build.MODEL}, Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})\n")
         sb.append("Two Wi-Fi links at once (local-only): ${safe { wifi.isStaConcurrencyForLocalOnlyConnectionsSupported }}\n")
         sb.append("Wi-Fi + hotspot at once: ${safe { wifi.isStaApConcurrencySupported }}\n")
@@ -51,7 +52,8 @@ internal object Report {
         val missing = missingPermissions(ctx).map { it.second }
         sb.append("Permissions missing: ${if (missing.isEmpty()) "none" else missing.joinToString()}\n")
         sb.append("Battery: exempt from optimisation=${Power.exempt(ctx)}, background restricted=${Power.restricted(ctx)}, standby bucket=${Power.standbyBucket(ctx)}\n")
-        sb.append("Link: ${Link.state}, camera ${Link.cameraSsid} at ${Link.cameraIp}, asked ${Link.core.requests}x (${Link.core.retries} automatic)\n")
+        sb.append("Link: ${Link.state}, camera ${Link.cameraSsid} at ${Link.cameraIp}, asked ${Link.core.requests}x (${Link.core.retries} automatic)")
+        sb.append(if (Link.core.singleWifi) ", one Wi-Fi connection: drops are not taken back by itself\n" else "\n")
         Link.lastError?.let { sb.append("  ").append(it).append("\n") }
         Link.core.addressInfo?.let { sb.append("  Addresses: ").append(it).append("\n") }
         for ((net, caps) in Link.wifiNets) {
@@ -72,8 +74,11 @@ internal object Report {
         }
         val events = Link.events()
         if (events.isNotEmpty()) {
-            sb.append("\n== Link events\n")
-            for (line in events) sb.append(Diag.redact(line)).append("\n")
+            // Kept in memory only: the list starts again whenever Android restarts the app.
+            val started = System.currentTimeMillis() - (android.os.SystemClock.elapsedRealtime() - android.os.Process.getStartElapsedRealtime())
+            sb.append("\n== Link events since the app started at ${String.format(java.util.Locale.US, "%tT", started)}\n")
+            // Masked, not filtered by word: these lines never hold the password, and a word filter would drop some.
+            for (line in events) sb.append(Diag.mask(line, listOf(secret))).append("\n")
         }
         App.lastCrash(ctx)?.let { sb.append("\n== Last crash\n").append(it.take(4000)).append("\n") }
 
