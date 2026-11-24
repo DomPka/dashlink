@@ -700,6 +700,8 @@ class MainActivity : Activity() {
         fields = LinearLayout(this)
         ssid = field("Camera Wi-Fi name")
         ssid.id = R.id.ssid
+        // A network name is not a word: no spell check (its suggestion box covered the screen) and no autocorrect.
+        ssid.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         ssid.setText(prefs.getString("ssid", "MiVue"))
         pass = field("Wi-Fi password")
         pass.id = R.id.pass
